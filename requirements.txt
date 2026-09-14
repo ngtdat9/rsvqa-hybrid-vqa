@@ -1,0 +1,12 @@
+# torch/torchvision: CPU build fine on Mac (dev/pipeline work).
+# On the GPU machine, install with the CUDA-specific index instead:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+numpy
+pandas
+pyyaml
+pytest
+pillow
+matplotlib
+torch
+torchvision
