@@ -8,6 +8,9 @@ images, 1M+ QA pairs).
 # Conventions
 - All hyperparameters in configs/model_config.yaml, never hardcoded
 - Image size and answer-vocabulary size are config-driven, not hardcoded
+- Count questions are a regression target (scalar output), not part of the
+  classification vocab — the model has a shared backbone with a classification
+  head (presence/comparison/rural_urban/area) and a separate count-regression head
 - Type hints on all functions
 - Every module in src/ gets a matching test in tests/
 - Data pipeline must stream/chunk — never assume the full dataset fits in memory

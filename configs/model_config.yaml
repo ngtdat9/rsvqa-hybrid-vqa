@@ -1,4 +1,7 @@
 image_size: 256
-vocab_size: 9
+# classification vocab only — excludes "count" questions, which use the
+# separate count_regression head instead. Confirmed empirically from
+# data/raw/rsvqa_lr: non-count answers are exactly {yes, no, rural, urban}.
+vocab_size: 4
 data_dir: data/processed
 
