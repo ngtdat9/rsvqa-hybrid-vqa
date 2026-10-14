@@ -9,6 +9,7 @@ from typing import Any
 import torch
 import yaml
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.data_pipeline import QuestionVocab, get_dataloaders
 from src.evaluate import evaluate
@@ -46,14 +47,16 @@ def run_epoch(
     optimizer: torch.optim.Optimizer | None,
     device: torch.device,
     config: dict[str, Any],
+    desc: str = "",
 ) -> float:
     model.train(optimizer is not None)
     total_loss = 0.0
     num_batches = 0
 
+    progress = tqdm(dataloader, desc=desc, leave=False, unit="batch")
     context = torch.enable_grad() if optimizer is not None else torch.no_grad()
     with context:
-        for batch in dataloader:
+        for batch in progress:
             batch = {
                 k: (v.to(device) if isinstance(v, torch.Tensor) else v)
                 for k, v in batch.items()
@@ -68,6 +71,7 @@ def run_epoch(
 
             total_loss += loss.item()
             num_batches += 1
+            progress.set_postfix(avg_loss=total_loss / num_batches)
 
     return total_loss / num_batches
 
@@ -87,11 +91,22 @@ def train(config: dict[str, Any]) -> Path:
     best_val_loss = float("inf")
     patience_counter = 0
 
+    epochs = config["epochs"]
     with open(log_path, "a") as log_file:
-        for epoch in range(config["epochs"]):
-            train_loss = run_epoch(model, dataloaders["train"], optimizer, device, config)
-            val_loss = run_epoch(model, dataloaders["val"], None, device, config)
+        for epoch in tqdm(range(epochs), desc="Epochs", unit="epoch"):
+            train_loss = run_epoch(
+                model, dataloaders["train"], optimizer, device, config,
+                desc=f"Epoch {epoch + 1}/{epochs} [train]",
+            )
+            val_loss = run_epoch(
+                model, dataloaders["val"], None, device, config,
+                desc=f"Epoch {epoch + 1}/{epochs} [val]",
+            )
             val_metrics = evaluate(model, dataloaders["val"], device)
+            tqdm.write(
+                f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
+                f"val_class_acc={val_metrics['class_accuracy']:.4f} val_count_mae={val_metrics['count_mae']:.4f}"
+            )
 
             log_entry = {
                 "epoch": epoch,

@@ -10,3 +10,4 @@ pillow
 matplotlib
 torch
 torchvision
+tqdm
