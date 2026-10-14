@@ -14,7 +14,7 @@ follows.
 
 ## Status
 
-Week 1 (RSVQA-LR pipeline) is implemented and tested:
+**Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 
 | Module | Status |
 |---|---|
@@ -26,6 +26,29 @@ Week 1 (RSVQA-LR pipeline) is implemented and tested:
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
 Run `pytest tests/ -v` to verify (26 tests, all passing).
+
+### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
+
+See [`reports/baseline_results_week1_baseline_20261014-130407.md`](reports/baseline_results_week1_baseline_20261014-130407.md).
+
+| Metric | Value |
+|---|---|
+| Classification accuracy (overall) | 73.2% |
+| — comp | 65.0% |
+| — rural_urban | 56.0% |
+| — presence | 84.8% |
+| Count MAE | 193.6 |
+| Count RMSE | 732.5 |
+
+**Known issue, deliberately not fixed for LR:** the count-regression head
+barely learns — `val_class_acc` climbed steadily across epochs (55.5% →
+75.7%) while `val_count_mae` stayed flat/noisy, despite count MSE dominating
+the combined loss by several orders of magnitude over the classification
+cross-entropy. Root cause is a loss-scaling problem (raw RSVQA counts run
+into the thousands), not a capacity problem — fix is to log-transform or
+standardize the count target before computing MSE. Not worth fixing for this
+LR pipeline-validation pass, but **must be addressed before/during the
+RSVQA-HR port**, since HR is the actual training/evaluation target.
 
 ## Key design decisions
 
