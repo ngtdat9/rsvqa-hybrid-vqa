@@ -9,7 +9,7 @@ from typing import Any
 import torch
 import yaml
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from src.data_pipeline import QuestionVocab, get_dataloaders
 from src.evaluate import evaluate
