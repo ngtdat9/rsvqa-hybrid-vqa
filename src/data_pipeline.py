@@ -306,5 +306,6 @@ def get_dataloaders(config: dict[str, Any]) -> dict[str, DataLoader]:
             batch_size=config["batch_size"],
             shuffle=(split == "train"),
             collate_fn=vqa_collate_fn,
+            num_workers=config["num_workers"],
         )
     return dataloaders

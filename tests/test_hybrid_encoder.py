@@ -42,7 +42,12 @@ def test_gradient_flows_to_cnn_and_transformer_params():
     encoder = make_encoder()
     image = torch.randn(4, 3, TEST_CONFIG["image_size"], TEST_CONFIG["image_size"])
     out = encoder(image)
-    out.pooled.sum().backward()
+    # A uniform .sum() can structurally cancel to an exact zero gradient for
+    # some LayerNorm-adjacent bias terms (LayerNorm centers its output, so
+    # summing all output features with equal weight has a degenerate
+    # gradient for certain random inits). A random weighting avoids that.
+    weights = torch.randn_like(out.pooled)
+    (out.pooled * weights).sum().backward()
 
     for name, param in encoder.named_parameters():
         assert param.grad is not None, f"{name} has no gradient"

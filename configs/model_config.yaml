@@ -8,6 +8,7 @@ raw_dir: data/raw/rsvqa_lr
 # max token count in the train split's questions is 26 (verified empirically)
 max_question_len: 26
 batch_size: 64
+num_workers: 0   # set higher (e.g. 4) on a GPU box like Colab, where data loading can bottleneck the GPU
 
 # --- model hyperparameters (first pass; tuned in Week 3) ---
 cnn_channels: [32, 64, 128, 128]   # CNN stem channel progression
@@ -19,4 +20,12 @@ dropout: 0.1
 question_embed_dim: 128             # equal to d_model for simplicity; can diverge in Week 3
 fusion_hidden_dim: 256
 count_loss_weight: 1.0
+
+# --- training ---
+learning_rate: 0.001
+epochs: 5
+optimizer: adamw
+early_stopping_patience: 3
+experiments_dir: experiments
+experiment_name: week1_baseline   # train.py appends a timestamp to form the run dir
 
