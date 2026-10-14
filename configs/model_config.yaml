@@ -9,3 +9,14 @@ raw_dir: data/raw/rsvqa_lr
 max_question_len: 26
 batch_size: 64
 
+# --- model hyperparameters (first pass; tuned in Week 3) ---
+cnn_channels: [32, 64, 128, 128]   # CNN stem channel progression
+d_model: 128                        # transformer embedding dim
+num_transformer_layers: 2
+num_heads: 4
+ffn_dim: 256
+dropout: 0.1
+question_embed_dim: 128             # equal to d_model for simplicity; can diverge in Week 3
+fusion_hidden_dim: 256
+count_loss_weight: 1.0
+
