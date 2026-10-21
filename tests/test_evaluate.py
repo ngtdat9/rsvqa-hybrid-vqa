@@ -79,3 +79,37 @@ def test_count_rows_excluded_from_classification_and_vice_versa():
     expected_rmse = (((10.0 - 8.0) ** 2 + (4.0 - 4.0) ** 2) / 2) ** 0.5
     assert math.isclose(result["count_mae"], expected_mae, rel_tol=1e-6)
     assert math.isclose(result["count_rmse"], expected_rmse, rel_tol=1e-6)
+
+
+def test_median_baseline_metrics():
+    # count rows: targets 10 and 4; constant baseline 6 -> abs errors 4 and 2
+    batch = {
+        "label": torch.tensor([0, -1, -1]),
+        "question_type": ["comp", "count", "count"],
+        "count_target": torch.tensor([float("nan"), 10.0, 4.0]),
+    }
+    model = FixedOutputModel(
+        class_logits=torch.tensor([[10.0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]),
+        count_pred=torch.tensor([0.0, 10.0, 4.0]),
+    )
+    result = evaluate(model, make_dataloader(batch), baseline_count=6.0)
+    assert math.isclose(result["count_mae_baseline"], 3.0, rel_tol=1e-6)
+    assert math.isclose(result["count_rmse_baseline"], (((4.0 ** 2) + (2.0 ** 2)) / 2) ** 0.5, rel_tol=1e-6)
+    assert result["count_mae"] == 0.0
+
+    without = evaluate(model, make_dataloader(batch))
+    assert "count_mae_baseline" not in without
+
+
+def test_train_count_median_uses_records_not_images():
+    from types import SimpleNamespace
+
+    records = [
+        {"type": "count", "answer": "10"}, {"type": "count", "answer": "2"},
+        {"type": "count", "answer": "4"}, {"type": "presence", "answer": "yes"},
+    ]
+    loader = SimpleNamespace(dataset=SimpleNamespace(qa_records=records))
+    from src.evaluate import train_count_median
+
+    assert train_count_median(loader) == 4.0
+    assert train_count_median(SimpleNamespace(dataset=SimpleNamespace(qa_records=[]))) is None

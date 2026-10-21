@@ -20,6 +20,12 @@ dropout: 0.1
 question_embed_dim: 128             # equal to d_model for simplicity; can diverge in Week 3
 fusion_hidden_dim: 256
 count_loss_weight: 1.0
+# cross_attention = question tokens attend over image patch tokens (default).
+# concat          = Week 1 baseline (CLS + mean question vector -> MLP), for the ablation.
+fusion_type: cross_attention
+# log1p = MSE on log(1 + count) so the count loss doesn't dwarf cross-entropy.
+# none  = raw-count MSE (Week 1 baseline behaviour), for the ablation.
+count_loss_transform: log1p
 
 # --- training ---
 learning_rate: 0.001
@@ -27,5 +33,5 @@ epochs: 5
 optimizer: adamw
 early_stopping_patience: 3
 experiments_dir: experiments
-experiment_name: week1_baseline   # train.py appends a timestamp to form the run dir
+experiment_name: week2_crossattn   # train.py appends a timestamp to form the run dir
 

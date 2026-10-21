@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from src.data_pipeline import QuestionVocab, get_dataloaders
-from src.evaluate import evaluate
+from src.evaluate import evaluate, train_count_median
 from src.models.vqa_head import HybridVQAModel, compute_loss
 
 
@@ -38,6 +38,8 @@ def build_model(config: dict[str, Any]) -> HybridVQAModel:
         question_embed_dim=config["question_embed_dim"],
         fusion_hidden_dim=config["fusion_hidden_dim"],
         vocab_size=config["vocab_size"],
+        fusion_type=config["fusion_type"],
+        max_question_len=config["max_question_len"],
     )
 
 
@@ -62,7 +64,11 @@ def run_epoch(
                 for k, v in batch.items()
             }
             outputs = model(batch)
-            loss = compute_loss(outputs, batch, count_loss_weight=config["count_loss_weight"])
+            loss = compute_loss(
+                outputs, batch,
+                count_loss_weight=config["count_loss_weight"],
+                count_transform=config["count_loss_transform"],
+            )
 
             if optimizer is not None:
                 optimizer.zero_grad()
@@ -81,6 +87,8 @@ def train(config: dict[str, Any]) -> Path:
     device = get_device()
     model = build_model(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
+    # median train count: the "always predict the median" baseline for count MAE/RMSE
+    baseline_count = train_count_median(dataloaders["train"])
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = Path(config["experiments_dir"]) / f"{config['experiment_name']}_{timestamp}"
@@ -102,7 +110,7 @@ def train(config: dict[str, Any]) -> Path:
                 model, dataloaders["val"], None, device, config,
                 desc=f"Epoch {epoch + 1}/{epochs} [val]",
             )
-            val_metrics = evaluate(model, dataloaders["val"], device)
+            val_metrics = evaluate(model, dataloaders["val"], device, baseline_count=baseline_count)
             tqdm.write(
                 f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
                 f"val_class_acc={val_metrics['class_accuracy']:.4f} val_count_mae={val_metrics['count_mae']:.4f}"
@@ -115,6 +123,7 @@ def train(config: dict[str, Any]) -> Path:
                 "val_class_acc": val_metrics["class_accuracy"],
                 "val_count_mae": val_metrics["count_mae"],
                 "val_count_rmse": val_metrics["count_rmse"],
+                "val_count_mae_baseline": val_metrics.get("count_mae_baseline"),
                 "timestamp": datetime.now().isoformat(),
             }
             log_file.write(json.dumps(log_entry) + "\n")

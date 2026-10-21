@@ -14,11 +14,24 @@ from torch.utils.data import DataLoader
 QUESTION_TYPES = ("comp", "rural_urban", "presence")
 
 
+def train_count_median(dataloader: DataLoader) -> float | None:
+    """Median count answer in a dataloader's records (no images are loaded)."""
+    records = getattr(dataloader.dataset, "qa_records", [])
+    counts = sorted(float(r["answer"]) for r in records if r["type"] == "count")
+    if not counts:
+        return None
+    mid = len(counts) // 2
+    return counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2
+
+
 def evaluate(
     model: nn.Module,
     dataloader: DataLoader,
     device: torch.device | None = None,
+    baseline_count: float | None = None,
 ) -> dict[str, Any]:
+    """Metrics for a model. If ``baseline_count`` is given, also report the MAE/RMSE
+    of always predicting that constant (e.g. the train-set median count)."""
     if device is not None:
         model = model.to(device)
     model.eval()
@@ -27,6 +40,8 @@ def evaluate(
     total_by_type = {t: 0 for t in QUESTION_TYPES}
     abs_errors: list[torch.Tensor] = []
     sq_errors: list[torch.Tensor] = []
+    base_abs: list[torch.Tensor] = []
+    base_sq: list[torch.Tensor] = []
 
     with torch.no_grad():
         for batch in dataloader:
@@ -55,6 +70,10 @@ def evaluate(
                 diff = outputs["count_pred"][count_mask] - count_target[count_mask]
                 abs_errors.append(diff.abs())
                 sq_errors.append(diff ** 2)
+                if baseline_count is not None:
+                    base_diff = count_target[count_mask] - baseline_count
+                    base_abs.append(base_diff.abs())
+                    base_sq.append(base_diff ** 2)
 
     class_accuracy_by_type = {
         qtype: (correct_by_type[qtype] / total_by_type[qtype]) if total_by_type[qtype] > 0 else float("nan")
@@ -73,12 +92,16 @@ def evaluate(
         count_mae = float("nan")
         count_rmse = float("nan")
 
-    return {
+    result = {
         "class_accuracy": class_accuracy,
         "class_accuracy_by_type": class_accuracy_by_type,
         "count_mae": count_mae,
         "count_rmse": count_rmse,
     }
+    if baseline_count is not None:
+        result["count_mae_baseline"] = torch.cat(base_abs).mean().item() if base_abs else float("nan")
+        result["count_rmse_baseline"] = torch.cat(base_sq).mean().sqrt().item() if base_sq else float("nan")
+    return result
 
 
 def render_markdown_table(metrics: dict[str, Any]) -> str:
@@ -91,38 +114,35 @@ def render_markdown_table(metrics: dict[str, Any]) -> str:
         lines.append(f"| Classification accuracy ({qtype}) | {metrics['class_accuracy_by_type'][qtype]:.4f} |")
     lines.append(f"| Count MAE | {metrics['count_mae']:.4f} |")
     lines.append(f"| Count RMSE | {metrics['count_rmse']:.4f} |")
+    if "count_mae_baseline" in metrics:
+        lines.append(f"| Count MAE (always predict train median) | {metrics['count_mae_baseline']:.4f} |")
+        lines.append(f"| Count RMSE (always predict train median) | {metrics['count_rmse_baseline']:.4f} |")
     return "\n".join(lines) + "\n"
 
 
 def _main() -> None:
-    from src.data_pipeline import QuestionVocab, get_dataloaders
-    from src.models.vqa_head import HybridVQAModel
-    from src.train import get_device
+    from src.data_pipeline import get_dataloaders
+    from src.train import build_model, get_device
 
     run_dir = Path(sys.argv[1])
     config = yaml.safe_load(Path("configs/model_config.yaml").read_text())
 
-    dataloaders = get_dataloaders(config)
-    question_vocab = QuestionVocab.load(Path(config["data_dir"]) / "vocab" / "question_vocab.json")
-
     device = get_device()
     checkpoint = torch.load(run_dir / "checkpoints" / "best.pt", map_location=device)
-    model = HybridVQAModel(
-        image_size=config["image_size"],
-        cnn_channels=config["cnn_channels"],
-        d_model=config["d_model"],
-        num_transformer_layers=config["num_transformer_layers"],
-        num_heads=config["num_heads"],
-        ffn_dim=config["ffn_dim"],
-        dropout=config["dropout"],
-        question_vocab_size=len(question_vocab),
-        question_embed_dim=config["question_embed_dim"],
-        fusion_hidden_dim=config["fusion_hidden_dim"],
-        vocab_size=config["vocab_size"],
-    )
+    ckpt_config = dict(checkpoint.get("config", config))
+    # checkpoints saved before the fusion_type option existed are the concat baseline
+    ckpt_config.setdefault("fusion_type", "concat")
+    # Model and data must agree on image size, question length and answer vocab, so
+    # take those from the checkpoint; file locations come from the live config.
+    shape_keys = ("image_size", "max_question_len", "vocab_size")
+    eval_config = {**config, **{k: ckpt_config[k] for k in shape_keys}}
+    model_config = {**ckpt_config, "data_dir": config["data_dir"], "raw_dir": config["raw_dir"]}
+
+    dataloaders = get_dataloaders(eval_config)
+    model = build_model(model_config)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    metrics = evaluate(model, dataloaders["test"], device)
+    metrics = evaluate(model, dataloaders["test"], device, baseline_count=train_count_median(dataloaders["train"]))
     table = render_markdown_table(metrics)
 
     out_path = Path("reports") / f"baseline_results_{run_dir.name}.md"
