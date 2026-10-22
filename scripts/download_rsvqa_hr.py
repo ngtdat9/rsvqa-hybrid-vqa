@@ -1,4 +1,5 @@
-"""Download RSVQA-HR from Zenodo (record 6344367, ~14.4 GB) and unzip the images.
+"""Download RSVQA-HR from Zenodo (record 6344367, ~14.4 GB) and extract the images
+(the record ships them as Images.tar).
 
 Meant for Colab (needs open internet and ~30 GB of local disk):
     python scripts/download_rsvqa_hr.py /content/rsvqa_hr_raw
@@ -32,6 +33,9 @@ def main() -> None:
     for archive in sorted(out.glob("*.zip")):
         print("unzipping", archive.name, flush=True)
         subprocess.run(["unzip", "-q", "-n", str(archive), "-d", str(out)], check=True)
+    for archive in sorted(out.glob("*.tar")):
+        print("extracting", archive.name, flush=True)
+        subprocess.run(["tar", "-xf", str(archive), "-C", str(out), "--skip-old-files"], check=True)
     print("done:", out)
 
 
