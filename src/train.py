@@ -110,7 +110,10 @@ def train(config: dict[str, Any]) -> Path:
                 model, dataloaders["val"], None, device, config,
                 desc=f"Epoch {epoch + 1}/{epochs} [val]",
             )
-            val_metrics = evaluate(model, dataloaders["val"], device, baseline_count=baseline_count)
+            val_metrics = evaluate(
+                model, dataloaders["val"], device,
+                baseline_count=baseline_count, question_types=config["question_types"],
+            )
             tqdm.write(
                 f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
                 f"val_class_acc={val_metrics['class_accuracy']:.4f} val_count_mae={val_metrics['count_mae']:.4f}"
@@ -152,6 +155,9 @@ def train(config: dict[str, Any]) -> Path:
 
 
 if __name__ == "__main__":
-    model_config = yaml.safe_load(Path("configs/model_config.yaml").read_text())
+    import sys
+
+    config_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("configs/model_config.yaml")
+    model_config = yaml.safe_load(config_path.read_text())
     best_checkpoint = train(model_config)
     print(f"Best checkpoint: {best_checkpoint}")

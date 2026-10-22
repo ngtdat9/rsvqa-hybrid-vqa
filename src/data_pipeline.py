@@ -1,4 +1,7 @@
-"""RSVQA-LR data pipeline: raw JSON/images -> training-ready batches.
+"""RSVQA data pipeline (LR and HR): raw JSON/images -> training-ready batches.
+
+Which dataset is read is entirely config-driven: ``split_file_prefix``
+("LR_split" / "USGS_split"), ``images_subdir``, ``image_ext`` and ``splits``.
 
 Count-type questions are a regression target (scalar), not part of the
 classification vocab -- see CLAUDE.md and RSVQA_Project_Plan.md.
@@ -7,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -25,10 +29,12 @@ SPLITS = ("train", "val", "test")
 # Raw loading
 # ---------------------------------------------------------------------------
 
-def load_split_raw(raw_dir: Path, split: str) -> tuple[list[dict], list[dict]]:
-    with open(raw_dir / f"LR_split_{split}_questions.json") as f:
+def load_split_raw(
+    raw_dir: Path, split: str, prefix: str = "LR_split"
+) -> tuple[list[dict], list[dict]]:
+    with open(raw_dir / f"{prefix}_{split}_questions.json") as f:
         questions = json.load(f)["questions"]
-    with open(raw_dir / f"LR_split_{split}_answers.json") as f:
+    with open(raw_dir / f"{prefix}_{split}_answers.json") as f:
         answers = json.load(f)["answers"]
     return questions, answers
 
@@ -52,6 +58,27 @@ def build_qa_records(questions: list[dict], answers: list[dict]) -> list[dict]:
             }
         )
     return records
+
+
+def _sample_ids(ids: list[int], n: int, seed: int) -> list[int]:
+    """A deterministic, seeded sample of ``n`` ids (or all of them if there
+    are fewer than ``n``), used for both the pilot-subset and norm-stats
+    sampling below."""
+    if len(ids) <= n:
+        return ids
+    return random.Random(seed).sample(ids, n)
+
+
+def select_image_subset(records: list[dict], max_images: int | None, seed: int) -> list[dict]:
+    """Keep only the QA records of up to ``max_images`` tiles (all of a tile's
+    questions stay together). Deterministic for a given seed."""
+    if max_images is None:
+        return records
+    img_ids = sorted({r["img_id"] for r in records})
+    if len(img_ids) <= max_images:
+        return records
+    keep = set(_sample_ids(img_ids, max_images, seed))
+    return [r for r in records if r["img_id"] in keep]
 
 
 def tokenize(question: str) -> list[str]:
@@ -159,15 +186,40 @@ def load_norm_stats(path: Path) -> tuple[torch.Tensor, torch.Tensor]:
 # Cached-artifact builder
 # ---------------------------------------------------------------------------
 
+def _dataset_manifest(raw_dir: Path, config: dict[str, Any]) -> dict[str, str]:
+    """Identifies which raw dataset/layout a data_dir's cached artifacts came
+    from, so a data_dir accidentally reused for a different dataset is caught
+    instead of silently serving stale vocab/norm-stats."""
+    return {
+        "raw_dir": str(raw_dir),
+        "split_file_prefix": config["split_file_prefix"],
+        "images_subdir": config["images_subdir"],
+        "image_ext": config["image_ext"],
+    }
+
+
 def build_processed_artifacts(raw_dir: Path, processed_dir: Path, config: dict[str, Any]) -> None:
     vocab_dir = processed_dir / "vocab"
     question_vocab_path = vocab_dir / "question_vocab.json"
     answer_vocab_path = vocab_dir / "answer_vocab.json"
     norm_stats_path = vocab_dir / "image_norm_stats.json"
-    if question_vocab_path.exists() and answer_vocab_path.exists() and norm_stats_path.exists():
+    manifest_path = vocab_dir / "manifest.json"
+    manifest = _dataset_manifest(raw_dir, config)
+
+    if question_vocab_path.exists() and answer_vocab_path.exists() and norm_stats_path.exists() \
+            and manifest_path.exists():
+        cached_manifest = json.loads(manifest_path.read_text())
+        if cached_manifest != manifest:
+            raise ValueError(
+                f"data_dir={processed_dir} already holds cached vocab/norm-stats built from "
+                f"{cached_manifest}, but the current config describes {manifest}. "
+                "Use a separate data_dir per dataset instead of reusing this one."
+            )
         return
 
-    train_questions, train_answers = load_split_raw(raw_dir, "train")
+    prefix = config["split_file_prefix"]
+    train_questions, train_answers = load_split_raw(raw_dir, "train", prefix)
+    # vocabularies come from the FULL train split, even when training on a pilot subset
     train_records = build_qa_records(train_questions, train_answers)
 
     question_vocab = QuestionVocab.build([r["question"] for r in train_records])
@@ -176,10 +228,15 @@ def build_processed_artifacts(raw_dir: Path, processed_dir: Path, config: dict[s
     answer_vocab = AnswerVocab.build(train_records)
     answer_vocab.save(answer_vocab_path)
 
-    images_dir = raw_dir / "images" / "Images_LR"
+    images_dir = raw_dir / config["images_subdir"]
     train_img_ids = sorted({r["img_id"] for r in train_records})
-    mean, std = compute_image_norm_stats([images_dir / f"{img_id}.tif" for img_id in train_img_ids])
+    # a seeded sample of train tiles is enough for per-channel mean/std
+    train_img_ids = sorted(_sample_ids(train_img_ids, config["norm_stats_max_images"], config["subset_seed"]))
+    ext = config["image_ext"]
+    mean, std = compute_image_norm_stats([images_dir / f"{img_id}{ext}" for img_id in train_img_ids])
     save_norm_stats(mean, std, norm_stats_path)
+
+    manifest_path.write_text(json.dumps(manifest))
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +265,7 @@ class RSVQADataset(Dataset):
         image_size: int,
         max_question_len: int,
         transform: Callable | None = None,
+        image_ext: str = ".tif",
     ) -> None:
         self.qa_records = qa_records
         self.images_dir = images_dir
@@ -218,13 +276,14 @@ class RSVQADataset(Dataset):
         self.image_size = image_size
         self.max_question_len = max_question_len
         self.transform = transform
+        self.image_ext = image_ext
 
     def __len__(self) -> int:
         return len(self.qa_records)
 
     def __getitem__(self, idx: int) -> VQASample:
         record = self.qa_records[idx]
-        image_path = self.images_dir / f"{record['img_id']}.tif"
+        image_path = self.images_dir / f"{record['img_id']}{self.image_ext}"
         try:
             with Image.open(image_path) as im:
                 image = im.convert("RGB").copy()
@@ -280,17 +339,25 @@ def vqa_collate_fn(batch: list[VQASample]) -> dict[str, torch.Tensor | list[str]
 def get_dataloaders(config: dict[str, Any]) -> dict[str, DataLoader]:
     raw_dir = Path(config["raw_dir"])
     processed_dir = Path(config["data_dir"])
-    images_dir = raw_dir / "images" / "Images_LR"
+    images_dir = raw_dir / config["images_subdir"]
+    prefix = config["split_file_prefix"]
 
     build_processed_artifacts(raw_dir, processed_dir, config)
     question_vocab = QuestionVocab.load(processed_dir / "vocab" / "question_vocab.json")
     answer_vocab = AnswerVocab.load(processed_dir / "vocab" / "answer_vocab.json")
     image_mean, image_std = load_norm_stats(processed_dir / "vocab" / "image_norm_stats.json")
+    if len(answer_vocab) != config["vocab_size"]:
+        raise ValueError(
+            f"config vocab_size={config['vocab_size']} but the train split has "
+            f"{len(answer_vocab)} non-count answers: {answer_vocab.idx_to_class}"
+        )
 
+    max_images_per_split = config["max_images_per_split"] or {}
     dataloaders = {}
-    for split in SPLITS:
-        questions, answers = load_split_raw(raw_dir, split)
+    for split in config["splits"]:
+        questions, answers = load_split_raw(raw_dir, split, prefix)
         qa_records = build_qa_records(questions, answers)
+        qa_records = select_image_subset(qa_records, max_images_per_split.get(split), config["subset_seed"])
         dataset = RSVQADataset(
             qa_records=qa_records,
             images_dir=images_dir,
@@ -300,6 +367,7 @@ def get_dataloaders(config: dict[str, Any]) -> dict[str, DataLoader]:
             image_std=image_std,
             image_size=config["image_size"],
             max_question_len=config["max_question_len"],
+            image_ext=config["image_ext"],
         )
         dataloaders[split] = DataLoader(
             dataset,

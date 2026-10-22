@@ -5,6 +5,15 @@ image_size: 256
 vocab_size: 4
 data_dir: data/processed
 raw_dir: data/raw/rsvqa_lr
+# --- dataset layout (LR); configs/hr_config.yaml holds the HR values ---
+split_file_prefix: LR_split            # <prefix>_<split>_questions.json / _answers.json
+images_subdir: images/Images_LR        # relative to raw_dir
+image_ext: .tif
+splits: [train, val, test]
+question_types: [comp, rural_urban, presence]   # classification types; count is regressed
+norm_stats_max_images: 1000            # cap on train tiles used for mean/std (LR has 572)
+max_images_per_split: null             # e.g. {train: 1500, val: 300, test: 300} for a pilot
+subset_seed: 0
 # max token count in the train split's questions is 26 (verified empirically)
 max_question_len: 26
 batch_size: 64

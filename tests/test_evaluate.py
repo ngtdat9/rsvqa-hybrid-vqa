@@ -1,5 +1,6 @@
 import math
 
+import pytest
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
@@ -113,3 +114,34 @@ def test_train_count_median_uses_records_not_images():
 
     assert train_count_median(loader) == 4.0
     assert train_count_median(SimpleNamespace(dataset=SimpleNamespace(qa_records=[]))) is None
+
+
+def test_custom_question_types_for_hr():
+    batch = {
+        "label": torch.tensor([0, 1, -1]),
+        "question_type": ["presence", "area", "count"],
+        "count_target": torch.tensor([float("nan"), float("nan"), 2.0]),
+    }
+    model = FixedOutputModel(
+        class_logits=torch.tensor([[10.0, 0, 0], [10.0, 0, 0], [0, 0, 0]]),
+        count_pred=torch.tensor([0.0, 0.0, 2.0]),
+    )
+    result = evaluate(model, make_dataloader(batch), question_types=["presence", "comp", "area"])
+    assert set(result["class_accuracy_by_type"]) == {"presence", "comp", "area"}
+    assert result["class_accuracy_by_type"]["presence"] == 1.0
+    assert result["class_accuracy_by_type"]["area"] == 0.0
+    assert math.isnan(result["class_accuracy_by_type"]["comp"])
+
+
+def test_unexpected_question_type_raises_instead_of_silently_dropping():
+    batch = {
+        "label": torch.tensor([0, 1]),
+        "question_type": ["presence", "rural_urban"],  # "rural_urban" not in question_types below
+        "count_target": torch.tensor([float("nan"), float("nan")]),
+    }
+    model = FixedOutputModel(
+        class_logits=torch.tensor([[10.0, 0], [0, 10.0]]),
+        count_pred=torch.tensor([0.0, 0.0]),
+    )
+    with pytest.raises(ValueError, match="rural_urban"):
+        evaluate(model, make_dataloader(batch), question_types=["presence", "comp"])
