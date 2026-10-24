@@ -149,6 +149,10 @@ def train(config: dict[str, Any]) -> Path:
             else:
                 patience_counter += 1
                 if patience_counter >= config["early_stopping_patience"]:
+                    tqdm.write(
+                        f"Early stopping after epoch {epoch + 1}: val_loss has not improved for "
+                        f"{patience_counter} epochs (best {best_val_loss:.4f}, kept in best.pt)."
+                    )
                     break
 
     return checkpoints_dir / "best.pt"

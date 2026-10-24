@@ -22,7 +22,7 @@ max_images_per_split: {train: 1500, val: 300, test: 300, test_phili: 300}
 subset_seed: 0
 max_question_len: 32                   # verified: longest train question (p99 = 16)
 batch_size: 32
-num_workers: 4                         # Colab GPU box; data loading is the bottleneck at 512px
+num_workers: 2                         # Colab gives 2 CPU cores; more workers just warn and contend
 
 # --- model hyperparameters ---
 # 5 stride-2 stages: 512 -> 16x16 = 256 patch tokens, the same token count as LR
