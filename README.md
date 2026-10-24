@@ -28,7 +28,13 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (49 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (61 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+
+**Next:** the HR pilot run (1,500 train tiles) on Colab, using
+[`notebooks/colab_hr_pilot.ipynb`](notebooks/colab_hr_pilot.ipynb). The HR data was downloaded and
+inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no tile overlap, and question
+types presence / comp / area / count. Area answers turned out to be exact values (`'1234m2'`), so
+they're grouped into 5 ranges (`area_buckets`); count stays regression.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -54,8 +60,25 @@ of the raw value; `none` reproduces this baseline for comparison). Also added
 a **cross-attention fusion** mode (`fusion_type: cross_attention`, now the
 default) where question words attend directly over image patch tokens,
 replacing the original CLS-vector-concat approach (kept as `fusion_type:
-concat` for the ablation). A fresh LR run with both fixes is queued to
-confirm the count metrics actually improve before moving fully to HR.
+concat` for the ablation).
+
+### Week 2 LR re-run (log1p count loss + cross-attention, GPU)
+
+Validation results from `week2_crossattn` (stopped early after 10 of 15 epochs; best checkpoint
+at epoch 7). Test-set numbers not run yet.
+
+| Metric (validation, best checkpoint) | Week 1 | Week 2 |
+|---|---|---|
+| Combined loss | ~750,000 | **1.52** |
+| Classification accuracy | 74.2% | **78.3%** |
+| Count MAE | 192.4 | **167.5** |
+| Count MAE, always predicting the train median | — | 205.5 |
+
+The loss is now on a sane scale and the count head beats the median baseline by ~18%, but count
+predictions are still weak in absolute terms. LR counts are very skewed (median 6, max 16,640), so a
+few huge-count tiles dominate MAE; HR counts are small (0–56), so this matters less there. Train loss
+rose again after epoch 5 and val loss was noisy, consistent with a learning rate that's too high — the
+HR config uses `3e-4` instead of `1e-3`.
 
 ## Key design decisions
 
@@ -152,6 +175,11 @@ Philadelphia `test_phili`), and writes a markdown report to
 
 ### Training on a GPU (e.g. Google Colab)
 
+For HR, open [`notebooks/colab_hr_pilot.ipynb`](notebooks/colab_hr_pilot.ipynb) in Colab
+(File → Open notebook → GitHub). It covers data setup from Drive, the area-range check, pilot
+training with checkpoints written straight to Drive, and evaluation on both test sets. The steps
+below describe the same process in general terms.
+
 The local dev machine is CPU/MPS-only, so a full-dataset run is slow there.
 To train on a GPU instead:
 
@@ -211,7 +239,7 @@ tests/                     # one test module per src/ module, plus test_data_lay
 configs/
 ├── model_config.yaml      # LR hyperparameters
 └── hr_config.yaml         # HR hyperparameters (some values VERIFY-tagged pending real data)
-notebooks/                 # exploration only, no pipeline logic
+notebooks/                 # exploration + the Colab runner (colab_hr_pilot.ipynb); no pipeline logic
 experiments/                # checkpoints + run logs (gitignored)
 reports/                   # data inspection notes, baseline results tables
 ```
