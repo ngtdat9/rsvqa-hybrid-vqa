@@ -30,11 +30,13 @@ follows.
 
 Run `pytest tests/ -v` to verify (61 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
-**Next:** the HR pilot run (1,500 train tiles) on Colab, using
-[`notebooks/colab_hr_pilot.ipynb`](notebooks/colab_hr_pilot.ipynb). The HR data was downloaded and
-inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no tile overlap, and question
-types presence / comp / area / count. Area answers turned out to be exact values (`'1234m2'`), so
-they're grouped into 5 ranges (`area_buckets`); count stays regression.
+The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
+tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
+values (`'1234m2'`), so they're grouped into 5 ranges (`area_buckets`); count stays regression. The
+first HR pilot run (1,500 train tiles) is done; results are below.
+
+**Next:** speed up data loading (each question currently re-decodes its tile's PNG, so a pilot epoch
+takes ~1 hour on a Colab T4), then Week 3 tuning on the pilot subset.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -79,6 +81,27 @@ predictions are still weak in absolute terms. LR counts are very skewed (median 
 few huge-count tiles dominate MAE; HR counts are small (0–56), so this matters less there. Train loss
 rose again after epoch 5 and val loss was noisy, consistent with a learning rate that's too high — the
 HR config uses `3e-4` instead of `1e-3`.
+
+### HR pilot results (1,500 train tiles, Colab T4)
+
+See [`reports/baseline_results_hr_pilot_20261024-073555.md`](reports/baseline_results_hr_pilot_20261024-073555.md).
+Early stopping ended training after 5 epochs; the best checkpoint is from epoch 2. Test sets are the
+pilot's 300-tile subsets (~30,000 questions each), so treat these as early signals, not final results.
+
+| Metric | test | test_phili (Philadelphia) | Majority / median baseline (train) |
+|---|---|---|---|
+| Classification accuracy (overall) | **82.7%** | 76.8% | ~63% |
+| — presence | 89.3% | 81.7% | 59.7% (`no`) |
+| — comp | 78.1% | 75.6% | 66.7% (`no`) |
+| — area (5 ranges) | 81.4% | 70.8% | 60.7% (`0m2`) |
+| Count MAE | **1.50** | 4.57 | 2.23 / 4.96 (median) |
+
+- Every question type clearly beats always giving the most common answer; comp is the hardest.
+- `test_phili`, from a city the model never saw, is ~6 points lower, and its count MAE barely beats
+  the median baseline (4.57 vs 4.96): count generalizes poorly to the denser new city.
+- The best checkpoint was chosen by combined validation loss, which picked epoch 2 although validation
+  accuracy kept rising to 86.4% at epoch 4 (count error rose instead). How to pick the best checkpoint
+  is a Week 3 question.
 
 ## Key design decisions
 
