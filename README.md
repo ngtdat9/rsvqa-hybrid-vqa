@@ -177,6 +177,7 @@ All hyperparameters live in `configs/model_config.yaml` (LR) /
 | `vocab_size` | Classification answer vocab size (excludes count) |
 | `split_file_prefix`, `images_subdir`, `image_ext`, `splits` | Dataset file layout (differs between LR and HR) |
 | `question_types` | The non-count question types to report classification accuracy for |
+| `area_buckets` | HR only: range edges (m²) that exact area answers like `'1234m2'` are grouped into, making area a 5-class question; `null` for LR |
 | `norm_stats_max_images` | Cap on train tiles sampled for image mean/std |
 | `max_images_per_split`, `subset_seed` | Pilot-subset sampling (`null` for the full dataset) |
 | `cnn_channels`, `d_model`, `num_transformer_layers`, `num_heads`, `ffn_dim`, `dropout`, `question_embed_dim`, `fusion_hidden_dim` | Model architecture |

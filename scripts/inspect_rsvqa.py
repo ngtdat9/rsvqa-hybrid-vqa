@@ -79,7 +79,10 @@ def main() -> None:
         sub = [r["answer"] for r in train if r["type"] == qtype]
         top = Counter(sub).most_common(12)
         print(f"  {qtype} ({len(sub)} QA): " + ", ".join(f"{a!r} {pct(n, len(sub))}" for a, n in top))
-    print(f"  -> distinct non-count answers (= vocab_size): {len(non_count)}: {sorted(non_count)}")
+    shown = sorted(non_count)
+    if len(shown) > 30:
+        shown = shown[:30] + [f"... {len(non_count) - 30} more"]
+    print(f"  -> distinct non-count answers: {len(non_count)}: {shown}")
 
     counts = [int(r["answer"]) for r in train if r["type"] == "count" and str(r["answer"]).isdigit()]
     if counts:
@@ -91,6 +94,25 @@ def main() -> None:
             print(f"  {label:10s} {pct(sum(lo <= v <= hi for v in s), n)}")
         print(f"  median={statistics.median(s)} mean={statistics.mean(s):.1f} "
               f"p90={s[int(.9 * n)]} p99={s[int(.99 * n)]} max={s[-1]} distinct={len(set(s))}")
+
+    # HR area answers are exact values like '1234m2'; the pipeline groups them
+    # into ranges (config area_buckets). This shows how full each range would be.
+    areas = sorted(float(str(r["answer"]).removesuffix("m2")) for r in train if r["type"] == "area")
+    area_ranges_used = 0
+    if areas:
+        n = len(areas)
+        print(f"\n== Area answers in train ({n} QA, m2) -- share per range of area_buckets [0, 10, 100, 1000]")
+        for lo, hi in [(0, 0), (1, 10), (11, 100), (101, 1000), (1001, float("inf"))]:
+            share = sum(lo <= v <= hi for v in areas)
+            area_ranges_used += share > 0
+            label = f"{lo}" if lo == hi else (f"{lo}-{hi}" if hi != float("inf") else f">{lo - 1}")
+            print(f"  {label:10s} {pct(share, n)}")
+        nonzero = [v for v in areas if v > 0]
+        if nonzero:
+            k = len(nonzero)
+            print("  non-zero areas: " + " ".join(
+                f"p{q}={nonzero[min(int(q / 100 * k), k - 1)]:.0f}" for q in (10, 25, 50, 75, 90)
+            ) + f" max={nonzero[-1]:.0f}")
 
     lengths = sorted(len(tokenize(r["question"])) for r in train)
     if lengths:
@@ -122,7 +144,12 @@ def main() -> None:
         print(f"image_ext: {dirs[0][2]}")
     print(f"splits: {splits}")
     print(f"question_types: {sorted({r['type'] for r in train} - {'count'})}")
-    print(f"vocab_size: {len(non_count)}")
+    if areas:
+        other = {r["answer"] for r in train if r["type"] not in ("count", "area")}
+        print("area_buckets: [0, 10, 100, 1000]")
+        print(f"vocab_size: {len(other) + area_ranges_used}   # {len(other)} non-area answers + {area_ranges_used} non-empty area ranges")
+    else:
+        print(f"vocab_size: {len(non_count)}")
     if lengths:
         print(f"max_question_len: {lengths[-1]}")
 

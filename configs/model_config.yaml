@@ -11,6 +11,7 @@ images_subdir: images/Images_LR        # relative to raw_dir
 image_ext: .tif
 splits: [train, val, test]
 question_types: [comp, rural_urban, presence]   # classification types; count is regressed
+area_buckets: null                     # LR has no area questions (HR groups areas into ranges)
 norm_stats_max_images: 1000            # cap on train tiles used for mean/std (LR has 572)
 max_images_per_split: null             # e.g. {train: 1500, val: 300, test: 300} for a pilot
 subset_seed: 0

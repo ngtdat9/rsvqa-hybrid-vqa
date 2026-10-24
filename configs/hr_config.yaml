@@ -1,22 +1,26 @@
 # RSVQA-HR config. Values marked VERIFY are placeholders until
 # scripts/inspect_rsvqa.py has been run on the downloaded HR data.
 image_size: 512
-# classification vocab only (count is regressed). VERIFY: expected yes/no + the
-# area buckets; get_dataloaders raises with the real answer list if this is wrong.
+# classification vocab only (count is regressed): yes/no + the 5 area ranges.
+# get_dataloaders raises with the real answer list if a range ends up empty.
 vocab_size: 7
+# Area answers are exact values ('1234m2', 6,309 distinct in train), so they are
+# grouped into ranges. Inclusive upper edges in m2: 0 | 1-10 | 11-100 | 101-1000 | >1000.
+# Provisional: check against the area histogram from scripts/inspect_rsvqa.py.
+area_buckets: [0, 10, 100, 1000]
 data_dir: data/processed_hr            # separate cache: LR and HR vocabs must not collide
 raw_dir: data/raw/rsvqa_hr
 # --- dataset layout ---
 split_file_prefix: USGS_split
-images_subdir: Data                    # VERIFY with inspect_rsvqa.py
-image_ext: .tif                        # VERIFY
+images_subdir: Data                    # verified: 10,659 512x512 RGB tiles
+image_ext: .png                        # verified
 splits: [train, val, test, test_phili] # test_phili = second test set (Philadelphia)
-question_types: [presence, comp, area] # VERIFY; classification types, count is regressed
+question_types: [presence, comp, area] # verified; count is regressed
 norm_stats_max_images: 1000
 # Week 2 pilot (~1,000-1,500 tiles). Set to null for the full-dataset run.
 max_images_per_split: {train: 1500, val: 300, test: 300, test_phili: 300}
 subset_seed: 0
-max_question_len: 30                   # VERIFY: longest train question in tokens
+max_question_len: 32                   # verified: longest train question (p99 = 16)
 batch_size: 32
 num_workers: 4                         # Colab GPU box; data loading is the bottleneck at 512px
 

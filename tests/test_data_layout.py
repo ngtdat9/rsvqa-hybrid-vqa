@@ -11,7 +11,9 @@ from PIL import Image
 from src import data_pipeline as dp
 
 SPLITS = ["train", "val", "test", "test_phili"]
-TYPES_AND_ANSWERS = [("presence", "yes"), ("comp", "no"), ("area", "between 10m2 and 100m2"), ("count", "3")]
+# area answers use the real HR format: an exact value in m2
+TYPES_AND_ANSWERS = [("presence", "yes"), ("comp", "no"), ("area", "45m2"), ("count", "3")]
+AREA_BUCKETS = [0, 10, 100, 1000]
 
 
 def write_fake_hr(raw_dir: Path, tiles_per_split: int = 4) -> None:
@@ -36,7 +38,7 @@ def hr_config(tmp_path: Path, **overrides) -> dict:
     config = dict(
         image_size=32, vocab_size=3, data_dir=str(tmp_path / "processed"), raw_dir=str(tmp_path / "raw"),
         split_file_prefix="USGS_split", images_subdir="Data", image_ext=".tif", splits=SPLITS,
-        question_types=["presence", "comp", "area"], norm_stats_max_images=2,
+        question_types=["presence", "comp", "area"], area_buckets=AREA_BUCKETS, norm_stats_max_images=2,
         max_images_per_split=None, subset_seed=0, max_question_len=12, batch_size=4, num_workers=0,
     )
     config.update(overrides)
@@ -69,7 +71,7 @@ def test_count_regressed_and_area_classified(raw_dir, tmp_path):
 
 
 def test_wrong_vocab_size_fails_loudly_with_the_real_answers(raw_dir, tmp_path):
-    with pytest.raises(ValueError, match="between 10m2 and 100m2"):
+    with pytest.raises(ValueError, match="11-100m2"):
         dp.get_dataloaders(hr_config(tmp_path, vocab_size=9))
 
 
@@ -95,7 +97,7 @@ def test_select_image_subset_keeps_whole_tiles_and_is_deterministic():
 def test_vocab_built_from_full_train_even_with_pilot(raw_dir, tmp_path):
     dp.get_dataloaders(hr_config(tmp_path, max_images_per_split={"train": 1}))
     vocab = dp.AnswerVocab.load(tmp_path / "processed" / "vocab" / "answer_vocab.json")
-    assert set(vocab.class_to_idx) == {"yes", "no", "between 10m2 and 100m2"}
+    assert set(vocab.class_to_idx) == {"yes", "no", "11-100m2"}
 
 
 def test_reusing_data_dir_for_a_different_raw_dataset_raises(raw_dir, tmp_path):
@@ -108,3 +110,42 @@ def test_reusing_data_dir_for_a_different_raw_dataset_raises(raw_dir, tmp_path):
     config_b = hr_config(tmp_path, data_dir=str(shared_processed_dir), raw_dir=str(other_raw_dir))
     with pytest.raises(ValueError, match="data_dir"):
         dp.get_dataloaders(config_b)
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ("0m2", "0m2"),
+    ("1m2", "1-10m2"),
+    ("10m2", "1-10m2"),
+    ("11m2", "11-100m2"),
+    ("100m2", "11-100m2"),
+    ("101m2", "101-1000m2"),
+    ("1000m2", "101-1000m2"),
+    ("1001m2", ">1000m2"),
+    ("20465m2", ">1000m2"),
+])
+def test_bucket_area_answer_boundaries(answer, expected):
+    assert dp.bucket_area_answer(answer, AREA_BUCKETS) == expected
+
+
+def test_area_buckets_only_touch_area_records():
+    records = [
+        {"type": "area", "answer": "640m2"},
+        {"type": "count", "answer": "640"},
+        {"type": "presence", "answer": "yes"},
+    ]
+    out = dp.apply_area_buckets(records, AREA_BUCKETS)
+    assert [r["answer"] for r in out] == ["101-1000m2", "640", "yes"]
+    assert dp.apply_area_buckets(records, None) == records
+
+
+def test_area_answers_use_bucket_labels_in_every_split(raw_dir, tmp_path):
+    loaders = dp.get_dataloaders(hr_config(tmp_path))
+    for split in SPLITS:
+        area = {r["answer"] for r in loaders[split].dataset.qa_records if r["type"] == "area"}
+        assert area == {"11-100m2"}
+
+
+def test_changing_area_buckets_on_a_cached_data_dir_raises(raw_dir, tmp_path):
+    dp.get_dataloaders(hr_config(tmp_path))
+    with pytest.raises(ValueError, match="delete"):
+        dp.get_dataloaders(hr_config(tmp_path, area_buckets=[0, 50, 500]))

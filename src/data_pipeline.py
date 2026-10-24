@@ -60,6 +60,33 @@ def build_qa_records(questions: list[dict], answers: list[dict]) -> list[dict]:
     return records
 
 
+def bucket_area_answer(answer: str, edges: list[int]) -> str:
+    """Map an exact RSVQA-HR area answer (e.g. '1234m2') to a range label.
+
+    ``edges`` are inclusive upper bounds in whole m2: [0, 10, 100, 1000] gives
+    '0m2', '1-10m2', '11-100m2', '101-1000m2' and '>1000m2'.
+    """
+    value = float(answer.removesuffix("m2"))
+    lower = None
+    for edge in edges:
+        if value <= edge:
+            if lower is None:
+                return f"{edge}m2" if edge == 0 else f"<={edge}m2"
+            return f"{lower + 1}-{edge}m2"
+        lower = edge
+    return f">{edges[-1]}m2"
+
+
+def apply_area_buckets(records: list[dict], edges: list[int] | None) -> list[dict]:
+    """Replace each area answer with its range label (no-op when ``edges`` is None)."""
+    if edges is None:
+        return records
+    return [
+        {**r, "answer": bucket_area_answer(r["answer"], edges)} if r["type"] == "area" else r
+        for r in records
+    ]
+
+
 def _sample_ids(ids: list[int], n: int, seed: int) -> list[int]:
     """A deterministic, seeded sample of ``n`` ids (or all of them if there
     are fewer than ``n``), used for both the pilot-subset and norm-stats
@@ -186,15 +213,16 @@ def load_norm_stats(path: Path) -> tuple[torch.Tensor, torch.Tensor]:
 # Cached-artifact builder
 # ---------------------------------------------------------------------------
 
-def _dataset_manifest(raw_dir: Path, config: dict[str, Any]) -> dict[str, str]:
-    """Identifies which raw dataset/layout a data_dir's cached artifacts came
-    from, so a data_dir accidentally reused for a different dataset is caught
-    instead of silently serving stale vocab/norm-stats."""
+def _dataset_manifest(raw_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
+    """Identifies which raw dataset/layout (and area bucketing) a data_dir's
+    cached artifacts came from, so stale vocab/norm-stats are caught instead
+    of silently reused."""
     return {
         "raw_dir": str(raw_dir),
         "split_file_prefix": config["split_file_prefix"],
         "images_subdir": config["images_subdir"],
         "image_ext": config["image_ext"],
+        "area_buckets": config["area_buckets"],
     }
 
 
@@ -213,14 +241,14 @@ def build_processed_artifacts(raw_dir: Path, processed_dir: Path, config: dict[s
             raise ValueError(
                 f"data_dir={processed_dir} already holds cached vocab/norm-stats built from "
                 f"{cached_manifest}, but the current config describes {manifest}. "
-                "Use a separate data_dir per dataset instead of reusing this one."
+                f"Use a separate data_dir per dataset, or delete {vocab_dir} to rebuild it."
             )
         return
 
     prefix = config["split_file_prefix"]
     train_questions, train_answers = load_split_raw(raw_dir, "train", prefix)
     # vocabularies come from the FULL train split, even when training on a pilot subset
-    train_records = build_qa_records(train_questions, train_answers)
+    train_records = apply_area_buckets(build_qa_records(train_questions, train_answers), config["area_buckets"])
 
     question_vocab = QuestionVocab.build([r["question"] for r in train_records])
     question_vocab.save(question_vocab_path)
@@ -356,7 +384,7 @@ def get_dataloaders(config: dict[str, Any]) -> dict[str, DataLoader]:
     dataloaders = {}
     for split in config["splits"]:
         questions, answers = load_split_raw(raw_dir, split, prefix)
-        qa_records = build_qa_records(questions, answers)
+        qa_records = apply_area_buckets(build_qa_records(questions, answers), config["area_buckets"])
         qa_records = select_image_subset(qa_records, max_images_per_split.get(split), config["subset_seed"])
         dataset = RSVQADataset(
             qa_records=qa_records,
