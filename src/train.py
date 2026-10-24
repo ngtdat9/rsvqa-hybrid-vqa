@@ -113,6 +113,7 @@ def train(config: dict[str, Any]) -> Path:
             val_metrics = evaluate(
                 model, dataloaders["val"], device,
                 baseline_count=baseline_count, question_types=config["question_types"],
+                desc=f"Epoch {epoch + 1}/{epochs} [val metrics]",
             )
             tqdm.write(
                 f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "

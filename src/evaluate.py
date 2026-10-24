@@ -10,6 +10,7 @@ import torch
 import yaml
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 QUESTION_TYPES = ("comp", "rural_urban", "presence")
 
@@ -30,6 +31,7 @@ def evaluate(
     device: torch.device | None = None,
     baseline_count: float | None = None,
     question_types: tuple[str, ...] | list[str] = QUESTION_TYPES,
+    desc: str = "evaluate",
 ) -> dict[str, Any]:
     """Metrics for a model. If ``baseline_count`` is given, also report the MAE/RMSE
     of always predicting that constant (e.g. the train-set median count)."""
@@ -45,7 +47,7 @@ def evaluate(
     base_sq: list[torch.Tensor] = []
 
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc=desc, leave=False, unit="batch"):
             unexpected_types = set(batch["question_type"]) - set(question_types) - {"count"}
             if unexpected_types:
                 raise ValueError(
@@ -159,6 +161,7 @@ def _main() -> None:
         metrics = evaluate(
             model, dataloaders[split], device,
             baseline_count=baseline_count, question_types=config["question_types"],
+            desc=f"evaluate {split}",
         )
         sections.append(f"## Split: {split}\n\n{render_markdown_table(metrics)}")
     report = f"# Results: {run_dir.name}\n\n" + "\n".join(sections)
