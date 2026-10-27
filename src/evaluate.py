@@ -12,6 +12,8 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from src.data_pipeline import prepare_batch
+
 QUESTION_TYPES = ("comp", "rural_urban", "presence")
 
 
@@ -56,11 +58,7 @@ def evaluate(
                     "question_types config/argument to match the actual data, or these "
                     "rows will silently be excluded from the accuracy metrics"
                 )
-            if device is not None:
-                batch = {
-                    k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-                    for k, v in batch.items()
-                }
+            batch = prepare_batch(batch, device, dataloader.dataset)
             outputs = model(batch)
 
             label = batch["label"]

@@ -19,6 +19,7 @@ subset_seed: 0
 max_question_len: 26
 batch_size: 64
 num_workers: 0   # set higher (e.g. 4) on a GPU box like Colab, where data loading can bottleneck the GPU
+cache_images: false   # decode each tile once into <data_dir>/image_cache; worth enabling on Colab
 
 # --- model hyperparameters (first pass; tuned in Week 3) ---
 cnn_channels: [32, 64, 128, 128]   # CNN stem channel progression

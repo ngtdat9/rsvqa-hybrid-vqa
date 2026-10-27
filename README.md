@@ -28,15 +28,22 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (61 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (66 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
 values (`'1234m2'`), so they're grouped into 5 ranges (`area_buckets`); count stays regression. The
 first HR pilot run (1,500 train tiles) is done; results are below.
 
-**Next:** speed up data loading (each question currently re-decodes its tile's PNG, so a pilot epoch
-takes ~1 hour on a Colab T4), then Week 3 tuning on the pilot subset.
+The pilot took ~1 hour per epoch on a Colab T4 because data loading capped training at ~60
+samples/s: every question re-decoded its tile's 512×512 PNG and normalized it on Colab's 2 CPU
+cores. Two changes address that (see Key design decisions): tiles are decoded once into a cache
+(`cache_images`), and images reach the GPU as uint8 to be normalized there. On synthetic HR-sized
+tiles this took the loader from 269 to ~3,900 images/s on a laptop; the Colab speedup is still to be
+measured.
+
+**Next:** re-run the HR pilot with the faster loader to measure the new epoch time, then Week 3
+tuning on the pilot subset.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -121,6 +128,17 @@ pilot's 300-tile subsets (~30,000 questions each), so treat these as early signa
 - **Streaming-friendly from the start.** `RSVQADataset` loads images lazily
   in `__getitem__`, never eagerly into memory — same code path will handle
   HR's 10,659 images without a rewrite.
+- **Each tile is decoded once, not once per question.** With `cache_images: true`
+  (HR), `get_dataloaders` decodes each split's tiles into a memory-mapped
+  `.npy` file under `<data_dir>/image_cache/` (~0.8 MB per HR tile on local disk,
+  not RAM), reused across epochs and runs and rebuilt only when the tiles or
+  `image_size` change. Every tile has ~100 questions, so this removes ~99% of
+  decoding.
+- **Images travel as uint8 and are normalized on the device.** Dataset items
+  carry uint8 images; `prepare_batch` (used by training and evaluation) moves a
+  batch to the GPU and normalizes it there with the train-split mean/std. This
+  moves a quarter of the bytes between worker processes and takes the per-sample
+  float work off the CPU.
 - **Dataset layout is config-driven, not hardcoded to LR.** `split_file_prefix`,
   `images_subdir`, `image_ext`, `splits`, and `question_types` all live in
   config (`configs/model_config.yaml` for LR, `configs/hr_config.yaml` for
@@ -231,6 +249,7 @@ All hyperparameters live in `configs/model_config.yaml` (LR) /
 | `area_buckets` | HR only: range edges (m²) that exact area answers like `'1234m2'` are grouped into, making area a 5-class question; `null` for LR |
 | `norm_stats_max_images` | Cap on train tiles sampled for image mean/std |
 | `max_images_per_split`, `subset_seed` | Pilot-subset sampling (`null` for the full dataset) |
+| `cache_images` | Decode each tile once into `<data_dir>/image_cache/` (on for HR, off for LR) |
 | `cnn_channels`, `d_model`, `num_transformer_layers`, `num_heads`, `ffn_dim`, `dropout`, `question_embed_dim`, `fusion_hidden_dim` | Model architecture |
 | `fusion_type` | `cross_attention` (default) or `concat` (Week 1 baseline, kept for ablation) |
 | `count_loss_weight`, `count_loss_transform` | Count-regression loss weighting and scaling (`log1p` default, `none` for ablation) |

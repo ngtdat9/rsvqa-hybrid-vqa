@@ -98,9 +98,26 @@ def dataset(split_records, train_question_vocab, train_answer_vocab, norm_stats)
 def test_getitem_returns_correctly_shaped_tensors(dataset):
     sample = dataset[0]
     assert sample.image.shape == (3, CONFIG["image_size"], CONFIG["image_size"])
-    assert sample.image.dtype == torch.float32
+    assert sample.image.dtype == torch.uint8  # normalized later, on the device, by prepare_batch
     assert sample.question_tokens.shape == (CONFIG["max_question_len"],)
     assert sample.question_tokens.dtype == torch.long
+
+
+def test_prepare_batch_matches_cpu_normalization(dataset):
+    """GPU-side normalization in prepare_batch must equal the original per-sample
+    TF.to_tensor + TF.normalize on the CPU."""
+    from PIL import Image
+    import torchvision.transforms.functional as TF
+
+    samples = [dataset[i] for i in range(4)]
+    batch = dp.prepare_batch(dp.vqa_collate_fn(samples), torch.device("cpu"), dataset)
+    assert batch["image"].dtype == torch.float32
+    for i in range(4):
+        img_id = dataset.qa_records[i]["img_id"]
+        with Image.open(IMAGES_DIR / f"{img_id}.tif") as im:
+            expected = TF.normalize(TF.to_tensor(im.convert("RGB")), dataset.image_mean.tolist(),
+                                    dataset.image_std.tolist())
+        assert torch.allclose(batch["image"][i], expected, atol=1e-5)
 
 
 def test_count_question_routes_to_regression_not_classification(dataset, split_records):

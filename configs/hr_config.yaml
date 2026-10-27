@@ -23,6 +23,10 @@ subset_seed: 0
 max_question_len: 32                   # verified: longest train question (p99 = 16)
 batch_size: 32
 num_workers: 2                         # Colab gives 2 CPU cores; more workers just warn and contend
+# Decode each tile once into <data_dir>/image_cache (local disk, ~0.8 MB per tile:
+# ~1.9 GB for the pilot, ~8.3 GB for all tiles) instead of once per question.
+# Without it, PNG decoding capped training at ~60 samples/s on Colab.
+cache_images: true
 
 # --- model hyperparameters ---
 # 5 stride-2 stages: 512 -> 16x16 = 256 patch tokens, the same token count as LR

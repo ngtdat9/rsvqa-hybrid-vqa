@@ -11,7 +11,7 @@ import yaml
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from src.data_pipeline import QuestionVocab, get_dataloaders
+from src.data_pipeline import QuestionVocab, get_dataloaders, prepare_batch
 from src.evaluate import evaluate, train_count_median
 from src.models.vqa_head import HybridVQAModel, compute_loss
 
@@ -59,10 +59,7 @@ def run_epoch(
     context = torch.enable_grad() if optimizer is not None else torch.no_grad()
     with context:
         for batch in progress:
-            batch = {
-                k: (v.to(device) if isinstance(v, torch.Tensor) else v)
-                for k, v in batch.items()
-            }
+            batch = prepare_batch(batch, device, dataloader.dataset)
             outputs = model(batch)
             loss = compute_loss(
                 outputs, batch,

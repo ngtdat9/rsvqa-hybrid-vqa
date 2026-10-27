@@ -71,7 +71,7 @@ def test_overfit_single_batch_loss_decreases(tmp_path):
     model = build_model(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
 
-    batch = next(iter(dataloaders["train"]))
+    batch = dp.prepare_batch(next(iter(dataloaders["train"])), torch.device("cpu"), dataloaders["train"].dataset)
 
     losses = []
     for _ in range(20):

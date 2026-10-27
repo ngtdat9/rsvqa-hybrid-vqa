@@ -40,6 +40,7 @@ def hr_config(tmp_path: Path, **overrides) -> dict:
         split_file_prefix="USGS_split", images_subdir="Data", image_ext=".tif", splits=SPLITS,
         question_types=["presence", "comp", "area"], area_buckets=AREA_BUCKETS, norm_stats_max_images=2,
         max_images_per_split=None, subset_seed=0, max_question_len=12, batch_size=4, num_workers=0,
+        cache_images=False,
     )
     config.update(overrides)
     return config
@@ -143,6 +144,57 @@ def test_area_answers_use_bucket_labels_in_every_split(raw_dir, tmp_path):
     for split in SPLITS:
         area = {r["answer"] for r in loaders[split].dataset.qa_records if r["type"] == "area"}
         assert area == {"11-100m2"}
+
+
+@pytest.fixture
+def decode_counter(monkeypatch):
+    """Counts tile decodes (the expensive step the image cache exists to avoid)."""
+    calls = []
+    original = dp._decode_tile
+
+    def counting(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(dp, "_decode_tile", counting)
+    return calls
+
+
+def test_cached_images_match_uncached_exactly(raw_dir, tmp_path):
+    # image_size 64 = the fake tiles' native size, as with real HR (512) and LR (256)
+    plain = dp.get_dataloaders(hr_config(tmp_path, image_size=64))["train"].dataset
+    cached = dp.get_dataloaders(hr_config(tmp_path, image_size=64, cache_images=True))["train"].dataset
+    assert len(plain) == len(cached)
+    for i in range(len(plain)):
+        assert torch.equal(plain[i].image, cached[i].image)
+
+
+def test_cache_decodes_each_tile_once(raw_dir, tmp_path, decode_counter):
+    loaders = dp.get_dataloaders(hr_config(tmp_path, cache_images=True))
+    assert len(decode_counter) == 4 * len(SPLITS)  # 4 tiles per split, decoded while building
+    decode_counter.clear()
+    ds = loaders["train"].dataset
+    for i in range(len(ds)):  # 16 questions over 4 tiles
+        assert ds[i].image.shape == (3, 32, 32)
+    assert decode_counter == []
+
+
+def test_tile_cache_reused_then_rebuilt_when_size_changes(raw_dir, tmp_path, decode_counter):
+    dp.get_dataloaders(hr_config(tmp_path, cache_images=True))
+    decode_counter.clear()
+    dp.get_dataloaders(hr_config(tmp_path, cache_images=True))
+    assert decode_counter == []  # same tiles and size: reused
+    loaders = dp.get_dataloaders(hr_config(tmp_path, cache_images=True, image_size=16))
+    assert len(decode_counter) == 4 * len(SPLITS)  # different size: rebuilt
+    assert loaders["train"].dataset[0].image.shape == (3, 16, 16)
+
+
+def test_tile_cache_never_pickles_the_mapped_array(raw_dir, tmp_path):
+    import pickle
+
+    ds = dp.get_dataloaders(hr_config(tmp_path, cache_images=True))["train"].dataset
+    ds[0]  # opens the memory map in this process
+    assert len(pickle.dumps(ds.tile_cache)) < 10_000
 
 
 def test_changing_area_buckets_on_a_cached_data_dir_raises(raw_dir, tmp_path):
