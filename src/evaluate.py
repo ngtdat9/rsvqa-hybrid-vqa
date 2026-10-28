@@ -2,6 +2,7 @@
 type, and count-regression MAE/RMSE."""
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,21 @@ def train_count_median(dataloader: DataLoader) -> float | None:
     return counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2
 
 
+def selection_score(metrics: dict[str, Any]) -> float:
+    """Higher-is-better score that weighs both heads equally, used to pick best.pt:
+
+        classification accuracy + (1 - count MAE / MAE of always predicting the median)
+
+    The count half is how much better than the median baseline the count head is
+    (0 = no better, 1 = perfect). Without count rows or a baseline it is accuracy alone.
+    """
+    score = metrics["class_accuracy"]
+    baseline_mae = metrics.get("count_mae_baseline")
+    if baseline_mae is not None and baseline_mae > 0 and not math.isnan(metrics["count_mae"]):
+        score += 1 - metrics["count_mae"] / baseline_mae
+    return score
+
+
 def evaluate(
     model: nn.Module,
     dataloader: DataLoader,
@@ -34,12 +50,15 @@ def evaluate(
     baseline_count: float | None = None,
     question_types: tuple[str, ...] | list[str] = QUESTION_TYPES,
     desc: str = "evaluate",
+    mixed_precision: bool = False,
 ) -> dict[str, Any]:
     """Metrics for a model. If ``baseline_count`` is given, also report the MAE/RMSE
-    of always predicting that constant (e.g. the train-set median count)."""
+    of always predicting that constant (e.g. the train-set median count).
+    ``mixed_precision`` runs the forward pass in float16 on CUDA (ignored elsewhere)."""
     if device is not None:
         model = model.to(device)
     model.eval()
+    use_amp = mixed_precision and device is not None and device.type == "cuda"
 
     correct_by_type = {t: 0 for t in question_types}
     total_by_type = {t: 0 for t in question_types}
@@ -59,7 +78,9 @@ def evaluate(
                     "rows will silently be excluded from the accuracy metrics"
                 )
             batch = prepare_batch(batch, device, dataloader.dataset)
-            outputs = model(batch)
+            with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+                outputs = model(batch)
+            outputs = {k: v.float() for k, v in outputs.items()}
 
             label = batch["label"]
             class_mask = label != -1
@@ -159,7 +180,7 @@ def _main() -> None:
         metrics = evaluate(
             model, dataloaders[split], device,
             baseline_count=baseline_count, question_types=config["question_types"],
-            desc=f"evaluate {split}",
+            desc=f"evaluate {split}", mixed_precision=config["mixed_precision"],
         )
         sections.append(f"## Split: {split}\n\n{render_markdown_table(metrics)}")
     report = f"# Results: {run_dir.name}\n\n" + "\n".join(sections)

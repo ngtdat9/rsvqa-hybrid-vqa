@@ -5,7 +5,20 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from src.evaluate import QUESTION_TYPES, evaluate
+from src.evaluate import QUESTION_TYPES, evaluate, selection_score
+
+
+def test_selection_score_adds_count_gain_over_the_median_baseline():
+    metrics = {"class_accuracy": 0.8, "count_mae": 1.0, "count_mae_baseline": 2.0}
+    assert selection_score(metrics) == pytest.approx(0.8 + 0.5)
+    # count no better than always predicting the median contributes nothing
+    assert selection_score({**metrics, "count_mae": 2.0}) == pytest.approx(0.8)
+
+
+def test_selection_score_is_accuracy_alone_without_count_rows():
+    assert selection_score({"class_accuracy": 0.7, "count_mae": float("nan")}) == pytest.approx(0.7)
+    assert selection_score({"class_accuracy": 0.7, "count_mae": 1.0, "count_mae_baseline": None}) \
+        == pytest.approx(0.7)
 
 
 class FixedOutputModel(nn.Module):

@@ -40,6 +40,12 @@ count_loss_transform: log1p
 
 # --- training ---
 learning_rate: 0.001
+weight_decay: 0.01         # AdamW; was PyTorch's implicit default before this key existed
+lr_schedule: cosine        # cosine (warmup, then decay to 0) or constant; see hr_config.yaml
+warmup_fraction: 0.05
+seed: 0
+mixed_precision: true      # float16 math on CUDA only; ignored on CPU/MPS
+selection_metric: score    # score (val accuracy + count gain over median) or val_loss
 epochs: 5
 optimizer: adamw
 early_stopping_patience: 3

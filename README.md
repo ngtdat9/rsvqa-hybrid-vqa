@@ -28,7 +28,7 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (66 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (73 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
@@ -38,12 +38,19 @@ first HR pilot run (1,500 train tiles) is done; results are below.
 The pilot took ~1 hour per epoch on a Colab T4 because data loading capped training at ~60
 samples/s: every question re-decoded its tile's 512×512 PNG and normalized it on Colab's 2 CPU
 cores. Two changes address that (see Key design decisions): tiles are decoded once into a cache
-(`cache_images`), and images reach the GPU as uint8 to be normalized there. On synthetic HR-sized
-tiles this took the loader from 269 to ~3,900 images/s on a laptop; the Colab speedup is still to be
-measured.
+(`cache_images`), and images reach the GPU as uint8 to be normalized there. On Colab the loader
+went from 67 to 726 images/s, but epochs only dropped to ~38 min: the T4 itself became the
+bottleneck at ~77 training samples/s.
 
-**Next:** re-run the HR pilot with the faster loader to measure the new epoch time, then Week 3
-tuning on the pilot subset.
+The second pilot run also showed validation swinging between epochs (88% → 79% → 88% → 69%
+accuracy) while training loss stayed smooth, and early stopping firing on those swings. Before any
+tuning, training got: a fixed `seed`; a cosine learning-rate schedule with warmup (it had been
+constant); `best.pt` and early stopping chosen by a score that weighs accuracy and count error
+(`selection_metric: score`) instead of the combined loss; mixed precision on CUDA; and an explicit
+`weight_decay`.
+
+**Next:** one HR pilot run with these changes, to see whether the validation swings are gone and
+how much mixed precision speeds up epochs. Its result is the baseline for Week 3 tuning.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -270,7 +277,11 @@ All hyperparameters live in `configs/model_config.yaml` (LR) /
 | `cnn_channels`, `d_model`, `num_transformer_layers`, `num_heads`, `ffn_dim`, `dropout`, `question_embed_dim`, `fusion_hidden_dim` | Model architecture |
 | `fusion_type` | `cross_attention` (default) or `concat` (Week 1 baseline, kept for ablation) |
 | `count_loss_weight`, `count_loss_transform` | Count-regression loss weighting and scaling (`log1p` default, `none` for ablation) |
-| `learning_rate`, `epochs`, `optimizer`, `early_stopping_patience` | Training |
+| `learning_rate`, `weight_decay`, `epochs`, `optimizer`, `early_stopping_patience` | Training (`learning_rate` is the peak of the schedule) |
+| `lr_schedule`, `warmup_fraction` | `cosine`: linear warmup over that fraction of steps, then decay to 0 by the last epoch; or `constant` |
+| `seed` | Seeds weight init, shuffle order and dropout (GPU kernels can still differ in the last bits) |
+| `mixed_precision` | float16 math on CUDA via autocast + gradient scaling; ignored on CPU/MPS |
+| `selection_metric` | What `best.pt` and early stopping maximize: `score` = val accuracy + (1 − val count MAE / median-baseline MAE), or `val_loss` |
 | `experiments_dir`, `experiment_name` | Where runs are logged/checkpointed |
 
 `question_vocab_size` is **not** a config key — it's a train-split artifact,

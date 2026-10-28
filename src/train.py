@@ -1,19 +1,48 @@
-"""Training loop for HybridVQAModel on RSVQA-LR (Week 1 first pass)."""
+"""Training loop for HybridVQAModel (RSVQA-LR and RSVQA-HR)."""
 from __future__ import annotations
 
 import json
+import math
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import yaml
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from src.data_pipeline import QuestionVocab, get_dataloaders, prepare_batch
-from src.evaluate import evaluate, train_count_median
+from src.evaluate import evaluate, selection_score, train_count_median
 from src.models.vqa_head import HybridVQAModel, compute_loss
+
+LR_SCHEDULES = ("cosine", "constant")
+SELECTION_METRICS = ("score", "val_loss")
+
+
+def set_seed(seed: int) -> None:
+    """Seed Python, NumPy and PyTorch (all devices): weight init, shuffle order and
+    dropout repeat. GPU kernels can still differ in the last bits between runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def lr_multiplier(step: int, total_steps: int, warmup_steps: int, schedule: str) -> float:
+    """Factor applied to the base learning rate at optimizer step ``step``.
+
+    ``cosine``: linear warmup from ~0 to 1 over ``warmup_steps``, then cosine decay
+    to 0 at ``total_steps``. ``constant``: always 1.
+    """
+    if schedule == "constant":
+        return 1.0
+    if step < warmup_steps:
+        return (step + 1) / warmup_steps
+    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+    return 0.5 * (1 + math.cos(math.pi * min(progress, 1.0)))
 
 
 def get_device() -> torch.device:
@@ -50,8 +79,14 @@ def run_epoch(
     device: torch.device,
     config: dict[str, Any],
     desc: str = "",
+    scheduler: LambdaLR | None = None,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> float:
+    """One pass over ``dataloader``; trains when ``optimizer`` is given. Returns mean loss."""
     model.train(optimizer is not None)
+    use_amp = config["mixed_precision"] and device.type == "cuda"
+    if scaler is None:
+        scaler = torch.amp.GradScaler("cuda", enabled=False)  # plain backward/step
     total_loss = 0.0
     num_batches = 0
 
@@ -60,17 +95,21 @@ def run_epoch(
     with context:
         for batch in progress:
             batch = prepare_batch(batch, device, dataloader.dataset)
-            outputs = model(batch)
-            loss = compute_loss(
-                outputs, batch,
-                count_loss_weight=config["count_loss_weight"],
-                count_transform=config["count_loss_transform"],
-            )
+            with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+                outputs = model(batch)
+                loss = compute_loss(
+                    outputs, batch,
+                    count_loss_weight=config["count_loss_weight"],
+                    count_transform=config["count_loss_transform"],
+                )
 
             if optimizer is not None:
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                if scheduler is not None:
+                    scheduler.step()
 
             total_loss += loss.item()
             num_batches += 1
@@ -80,10 +119,27 @@ def run_epoch(
 
 
 def train(config: dict[str, Any]) -> Path:
+    if config["lr_schedule"] not in LR_SCHEDULES:
+        raise ValueError(f"lr_schedule must be one of {LR_SCHEDULES}, got {config['lr_schedule']!r}")
+    selection = config["selection_metric"]
+    if selection not in SELECTION_METRICS:
+        raise ValueError(f"selection_metric must be one of {SELECTION_METRICS}, got {selection!r}")
+
     dataloaders = get_dataloaders(config)
+    # Seed after the data loaders: building the image cache draws worker seeds from the
+    # global RNG, and whether it was built or reused must not change the model's init.
+    set_seed(config["seed"])
     device = get_device()
     model = build_model(config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"]
+    )
+    total_steps = config["epochs"] * len(dataloaders["train"])
+    warmup_steps = int(config["warmup_fraction"] * total_steps)
+    scheduler = LambdaLR(
+        optimizer, lambda step: lr_multiplier(step, total_steps, warmup_steps, config["lr_schedule"])
+    )
+    scaler = torch.amp.GradScaler("cuda", enabled=config["mixed_precision"] and device.type == "cuda")
     # median train count: the "always predict the median" baseline for count MAE/RMSE
     baseline_count = train_count_median(dataloaders["train"])
 
@@ -93,7 +149,7 @@ def train(config: dict[str, Any]) -> Path:
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "log.jsonl"
 
-    best_val_loss = float("inf")
+    best = -math.inf  # higher is better: the score itself, or -val_loss
     patience_counter = 0
 
     epochs = config["epochs"]
@@ -101,7 +157,7 @@ def train(config: dict[str, Any]) -> Path:
         for epoch in tqdm(range(epochs), desc="Epochs", unit="epoch"):
             train_loss = run_epoch(
                 model, dataloaders["train"], optimizer, device, config,
-                desc=f"Epoch {epoch + 1}/{epochs} [train]",
+                desc=f"Epoch {epoch + 1}/{epochs} [train]", scheduler=scheduler, scaler=scaler,
             )
             val_loss = run_epoch(
                 model, dataloaders["val"], None, device, config,
@@ -110,11 +166,14 @@ def train(config: dict[str, Any]) -> Path:
             val_metrics = evaluate(
                 model, dataloaders["val"], device,
                 baseline_count=baseline_count, question_types=config["question_types"],
-                desc=f"Epoch {epoch + 1}/{epochs} [val metrics]",
+                desc=f"Epoch {epoch + 1}/{epochs} [val metrics]", mixed_precision=config["mixed_precision"],
             )
+            val_score = selection_score(val_metrics)
+            lr = optimizer.param_groups[0]["lr"]
             tqdm.write(
                 f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-                f"val_class_acc={val_metrics['class_accuracy']:.4f} val_count_mae={val_metrics['count_mae']:.4f}"
+                f"val_class_acc={val_metrics['class_accuracy']:.4f} val_count_mae={val_metrics['count_mae']:.4f} "
+                f"val_score={val_score:.4f} lr={lr:.2e}"
             )
 
             log_entry = {
@@ -125,31 +184,35 @@ def train(config: dict[str, Any]) -> Path:
                 "val_count_mae": val_metrics["count_mae"],
                 "val_count_rmse": val_metrics["count_rmse"],
                 "val_count_mae_baseline": val_metrics.get("count_mae_baseline"),
+                "val_score": val_score,
+                "lr": lr,
                 "timestamp": datetime.now().isoformat(),
             }
             log_file.write(json.dumps(log_entry) + "\n")
             log_file.flush()
 
-            torch.save(
-                {"model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
-                 "epoch": epoch, "config": config},
-                checkpoints_dir / "last.pt",
-            )
+            checkpoint = {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
+                "epoch": epoch,
+                "config": config,
+            }
+            torch.save(checkpoint, checkpoints_dir / "last.pt")
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            current = val_score if selection == "score" else -val_loss
+            if current > best:
+                best = current
                 patience_counter = 0
-                torch.save(
-                    {"model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
-                     "epoch": epoch, "config": config},
-                    checkpoints_dir / "best.pt",
-                )
+                torch.save(checkpoint, checkpoints_dir / "best.pt")
             else:
                 patience_counter += 1
                 if patience_counter >= config["early_stopping_patience"]:
+                    best_shown = best if selection == "score" else -best
                     tqdm.write(
-                        f"Early stopping after epoch {epoch + 1}: val_loss has not improved for "
-                        f"{patience_counter} epochs (best {best_val_loss:.4f}, kept in best.pt)."
+                        f"Early stopping after epoch {epoch + 1}: {selection} has not improved for "
+                        f"{patience_counter} epochs (best {best_shown:.4f}, kept in best.pt)."
                     )
                     break
 
