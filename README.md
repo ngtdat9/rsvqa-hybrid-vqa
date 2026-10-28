@@ -110,6 +110,23 @@ pilot's 300-tile subsets (~30,000 questions each), so treat these as early signa
   accuracy kept rising to 86.4% at epoch 4 (count error rose instead). How to pick the best checkpoint
   is a Week 3 question.
 
+**Second pilot run, identical settings** (after the data-loading speedup; see
+[`reports/baseline_results_hr_pilot_20261027-131100.md`](reports/baseline_results_hr_pilot_20261027-131100.md)):
+early stopping ended it after 7 epochs, best checkpoint from epoch 4.
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| test accuracy (overall) | 82.7% | 87.0% |
+| test count MAE | 1.50 | 1.28 |
+| test_phili accuracy (overall) | 76.8% | 83.3% |
+| test_phili count MAE | 4.57 | 4.46 |
+
+Nothing that affects learning changed between the runs, so the 4–6 point gap is **run-to-run
+variation**: random initialization and shuffling, and above all which epoch early stopping kept
+(epoch 2 vs epoch 4). Tuning changes smaller than this can't be told apart from luck, so Week 3 tuning
+first needs a fixed seed and a better checkpoint-selection metric. Epochs took ~38 min on the T4,
+which is now the bottleneck (data loading reaches ~726 images/s).
+
 ## Key design decisions
 
 - **Count questions are a regression target**, not a classification bucket.
