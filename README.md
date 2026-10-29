@@ -58,7 +58,7 @@ two: one for the loss, one for the metrics), and a run cut off by a disconnect c
 its `last.pt` (`python -m src.train --resume <run_dir>`, or `RESUME` in the Colab notebook), with the
 same model, optimizer, schedule, early-stopping and random state.
 
-**Next:** Week 3 tuning on the pilot subset, judged on validation only: learning rate (6e-4, 1e-3
+**Next:** Week 3 tuning on the pilot subset, judged on validation only: learning rate (1.5e-4, 1e-3
 vs 3e-4), then model size, then 2 extra seeds of the winner to measure run-to-run spread. Then the
 full run on all 6,251 train tiles.
 
@@ -168,6 +168,23 @@ ran all 10 epochs; the best checkpoint is the last one.
   seeds in Week 3 will show it. Count on `test_phili` still barely beats the median baseline (4.41 vs
   4.96).
 - This run changed several things at once, so the gain over run 2 can't be credited to any single one.
+
+### Week 3 tuning (HR pilot, validation only)
+
+| Run | Peak LR | Epochs run | Best epoch | Best val accuracy | Val count MAE (best epoch) | Best val score |
+|---|---|---|---|---|---|---|
+| `hr_pilot_20261028-131854` (baseline) | 3e-4 | 10 | 10 | 89.7% | 1.04 | 1.443 |
+| `tune_lr1e-3` | 1e-3 | 5 (early stop) | 2 | 81.6% (epoch 4) | 1.69 | 1.061 |
+
+- **1e-3 is worse than 3e-4.** At every epoch it trails the baseline: by epoch 5 train loss is 0.72
+  vs 0.55, validation accuracy 78.6% vs 88.3%, and validation swings again (81.6% → 78.6%). Early
+  stopping cut it while the LR was still 5.4e-4, so its end-of-schedule result is unknown; but it is
+  so far behind on train loss that the cosine decay is unlikely to close a 10-point gap. Not rerun.
+- Because of that, the planned 6e-4 run was replaced by 1.5e-4: with 1e-3 clearly worse, 6e-4 would
+  probably land between the two, while 1.5e-4 tests the other side of 3e-4. Tuning runs from here
+  disable early stopping, so each setting gets its full schedule.
+- Epochs took ~21 min (baseline ~22.4): the single validation pass saves only ~1.5 min per pilot
+  epoch, because validation is small next to training.
 
 ## Key design decisions
 
