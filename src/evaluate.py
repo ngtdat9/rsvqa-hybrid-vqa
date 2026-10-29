@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from src.data_pipeline import prepare_batch
+from src.models.vqa_head import compute_loss
 
 QUESTION_TYPES = ("comp", "rural_urban", "presence")
 
@@ -51,10 +52,13 @@ def evaluate(
     question_types: tuple[str, ...] | list[str] = QUESTION_TYPES,
     desc: str = "evaluate",
     mixed_precision: bool = False,
+    loss_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Metrics for a model. If ``baseline_count`` is given, also report the MAE/RMSE
     of always predicting that constant (e.g. the train-set median count).
-    ``mixed_precision`` runs the forward pass in float16 on CUDA (ignored elsewhere)."""
+    ``mixed_precision`` runs the forward pass in float16 on CUDA (ignored elsewhere).
+    If ``loss_kwargs`` is given, also report ``loss``: the mean per-batch
+    ``compute_loss(outputs, batch, **loss_kwargs)``, so validation needs one pass."""
     if device is not None:
         model = model.to(device)
     model.eval()
@@ -66,6 +70,8 @@ def evaluate(
     sq_errors: list[torch.Tensor] = []
     base_abs: list[torch.Tensor] = []
     base_sq: list[torch.Tensor] = []
+    total_loss = 0.0
+    num_batches = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc=desc, leave=False, unit="batch"):
@@ -81,6 +87,9 @@ def evaluate(
             with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
                 outputs = model(batch)
             outputs = {k: v.float() for k, v in outputs.items()}
+            if loss_kwargs is not None:
+                total_loss += compute_loss(outputs, batch, **loss_kwargs).item()
+                num_batches += 1
 
             label = batch["label"]
             class_mask = label != -1
@@ -131,6 +140,8 @@ def evaluate(
     if baseline_count is not None:
         result["count_mae_baseline"] = torch.cat(base_abs).mean().item() if base_abs else float("nan")
         result["count_rmse_baseline"] = torch.cat(base_sq).mean().sqrt().item() if base_sq else float("nan")
+    if loss_kwargs is not None:
+        result["loss"] = total_loss / num_batches if num_batches else float("nan")
     return result
 
 
@@ -159,7 +170,7 @@ def _main() -> None:
     config = yaml.safe_load(config_path.read_text())
 
     device = get_device()
-    checkpoint = torch.load(run_dir / "checkpoints" / "best.pt", map_location=device)
+    checkpoint = torch.load(run_dir / "checkpoints" / "best.pt", map_location=device, weights_only=False)
     ckpt_config = dict(checkpoint.get("config", config))
     # checkpoints saved before the fusion_type option existed are the concat baseline
     ckpt_config.setdefault("fusion_type", "concat")

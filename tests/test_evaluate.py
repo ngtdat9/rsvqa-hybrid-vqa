@@ -158,3 +158,21 @@ def test_unexpected_question_type_raises_instead_of_silently_dropping():
     )
     with pytest.raises(ValueError, match="rural_urban"):
         evaluate(model, make_dataloader(batch), question_types=["presence", "comp"])
+
+
+def test_loss_kwargs_adds_mean_loss_matching_compute_loss():
+    from src.models.vqa_head import compute_loss
+
+    batch = {
+        "label": torch.tensor([0, 1, -1]),
+        "question_type": ["comp", "comp", "count"],
+        "count_target": torch.tensor([float("nan"), float("nan"), 3.0]),
+    }
+    model = FixedOutputModel(
+        class_logits=torch.tensor([[2.0, 0, 0, 0], [2.0, 0, 0, 0], [0, 0, 0, 0]]),
+        count_pred=torch.tensor([0.0, 0.0, 1.0]),
+    )
+    result = evaluate(model, make_dataloader(batch), loss_kwargs={"count_transform": "log1p"})
+    expected = compute_loss(model(batch), batch, count_transform="log1p").item()
+    assert result["loss"] == pytest.approx(expected)
+    assert "loss" not in evaluate(model, make_dataloader(batch))

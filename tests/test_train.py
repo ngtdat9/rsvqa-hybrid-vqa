@@ -65,7 +65,7 @@ def test_train_runs_and_writes_checkpoint_and_log(tmp_path):
                     "val_score", "lr", "timestamp"):
             assert key in entry
 
-    checkpoint = torch.load(best_checkpoint, map_location="cpu")
+    checkpoint = torch.load(best_checkpoint, map_location="cpu", weights_only=False)
     assert {"model_state_dict", "optimizer_state_dict", "scheduler_state_dict", "config"} <= set(checkpoint)
 
 
@@ -132,3 +132,53 @@ def test_overfit_single_batch_loss_decreases(tmp_path):
         losses.append(loss.item())
 
     assert losses[-1] < losses[0]
+
+
+def test_resume_after_interruption_matches_an_uninterrupted_run(tmp_path, monkeypatch):
+    import src.train as train_module
+
+    config = make_tiny_config(tmp_path)
+    config["epochs"] = 3
+    config["early_stopping_patience"] = 5
+    full = read_log(train({**config, "experiments_dir": str(tmp_path / "full")}))
+
+    # interrupt the second run during its 2nd training epoch, after epoch 1 was saved
+    real_run_epoch = train_module.run_epoch
+    calls = {"train": 0}
+
+    def crashing_run_epoch(*args, **kwargs):
+        if args[2] is not None:  # optimizer given: a training epoch
+            calls["train"] += 1
+            if calls["train"] == 2:
+                raise KeyboardInterrupt
+        return real_run_epoch(*args, **kwargs)
+
+    monkeypatch.setattr(train_module, "run_epoch", crashing_run_epoch)
+    with pytest.raises(KeyboardInterrupt):
+        train({**config, "experiments_dir": str(tmp_path / "resumed")})
+    monkeypatch.setattr(train_module, "run_epoch", real_run_epoch)
+
+    (run_dir,) = (tmp_path / "resumed").iterdir()
+    assert len(read_log(run_dir / "checkpoints" / "best.pt")) == 1
+    resumed = read_log(train({}, resume_dir=run_dir))
+
+    assert [e["epoch"] for e in resumed] == [0, 1, 2]
+    for a, b in zip(full, resumed):
+        for key in ("train_loss", "val_loss", "val_class_acc", "val_count_mae", "lr"):
+            assert a[key] == pytest.approx(b[key], rel=1e-5), key
+
+
+def test_resume_drops_log_lines_newer_than_last_checkpoint(tmp_path):
+    config = make_tiny_config(tmp_path)
+    run_dir = train(config).parent.parent
+    log_path = run_dir / "log.jsonl"
+    # simulate a crash after epoch 1 was logged but before last.pt was saved
+    stray = {**json.loads(log_path.read_text().splitlines()[0]), "epoch": 1}
+    log_path.write_text(log_path.read_text() + json.dumps(stray) + "\n")
+    with_extra_epoch = {**config, "epochs": 2}
+    checkpoint = torch.load(run_dir / "checkpoints" / "last.pt", weights_only=False)
+    checkpoint["config"] = {**checkpoint["config"], **with_extra_epoch}
+    torch.save(checkpoint, run_dir / "checkpoints" / "last.pt")
+
+    train({}, resume_dir=run_dir)
+    assert [e["epoch"] for e in read_log(run_dir / "checkpoints" / "best.pt")] == [0, 1]

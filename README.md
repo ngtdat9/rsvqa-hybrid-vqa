@@ -28,7 +28,7 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (73 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (76 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
@@ -53,7 +53,14 @@ The third pilot run with these changes (2026-10-28) ran all 10 epochs at ~22 min
 ~38, from mixed precision), validation improved almost every epoch with no swings, and test
 accuracy reached 88.5%. It is the baseline for Week 3 tuning.
 
-**Next:** Week 3 tuning on the pilot subset, starting with learning rate and number of epochs.
+Before tuning, two changes for the longer runs ahead: validation is one pass per epoch (it was
+two: one for the loss, one for the metrics), and a run cut off by a disconnect can be resumed from
+its `last.pt` (`python -m src.train --resume <run_dir>`, or `RESUME` in the Colab notebook), with the
+same model, optimizer, schedule, early-stopping and random state.
+
+**Next:** Week 3 tuning on the pilot subset, judged on validation only: learning rate (6e-4, 1e-3
+vs 3e-4), then model size, then 2 extra seeds of the winner to measure run-to-run spread. Then the
+full run on all 6,251 train tiles.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
