@@ -49,8 +49,11 @@ constant); `best.pt` and early stopping chosen by a score that weighs accuracy a
 (`selection_metric: score`) instead of the combined loss; mixed precision on CUDA; and an explicit
 `weight_decay`.
 
-**Next:** one HR pilot run with these changes, to see whether the validation swings are gone and
-how much mixed precision speeds up epochs. Its result is the baseline for Week 3 tuning.
+The third pilot run with these changes (2026-10-28) ran all 10 epochs at ~22 min each (down from
+~38, from mixed precision), validation improved almost every epoch with no swings, and test
+accuracy reached 88.5%. It is the baseline for Week 3 tuning.
+
+**Next:** Week 3 tuning on the pilot subset, starting with learning rate and number of epochs.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -133,6 +136,31 @@ variation**: random initialization and shuffling, and above all which epoch earl
 (epoch 2 vs epoch 4). Tuning changes smaller than this can't be told apart from luck, so Week 3 tuning
 first needs a fixed seed and a better checkpoint-selection metric. Epochs took ~38 min on the T4,
 which is now the bottleneck (data loading reaches ~726 images/s).
+
+**Third pilot run** (seed, cosine LR schedule, score-based checkpoint selection, mixed precision; see
+[`reports/baseline_results_hr_pilot_20261028-131854.md`](reports/baseline_results_hr_pilot_20261028-131854.md)):
+ran all 10 epochs; the best checkpoint is the last one.
+
+| | Run 2 | Run 3 |
+|---|---|---|
+| test accuracy (overall) | 87.0% | **88.5%** |
+| — presence / comp / area | 90.0 / 85.6 / 84.8% | 90.2 / 88.7 / 85.2% |
+| test count MAE | 1.28 | **1.14** |
+| test_phili accuracy (overall) | **83.3%** | 81.3% |
+| — area | **76.1%** | 70.7% |
+| test_phili count MAE | 4.46 | 4.41 |
+
+- Validation accuracy rose every epoch (78.2% → 89.7%) and count MAE fell except for one small step
+  back at epoch 5; the swings of run 2 are gone. Train loss stayed above validation loss (dropout is
+  on during training), so there is no sign of overfitting yet.
+- Validation was still improving when the learning rate reached 0 at epoch 10: the epoch budget, not
+  early stopping, ended training.
+- Epochs took ~22 min (run 2: ~38 min).
+- `test` improved but `test_phili` got worse, mainly on area (−5.4 points). With one run per setting
+  and 300-tile test subsets, this can't yet be told apart from run-to-run variation; the confirmation
+  seeds in Week 3 will show it. Count on `test_phili` still barely beats the median baseline (4.41 vs
+  4.96).
+- This run changed several things at once, so the gain over run 2 can't be credited to any single one.
 
 ## Key design decisions
 
