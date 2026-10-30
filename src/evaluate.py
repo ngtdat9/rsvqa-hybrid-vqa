@@ -53,15 +53,21 @@ def evaluate(
     desc: str = "evaluate",
     mixed_precision: bool = False,
     loss_kwargs: dict[str, Any] | None = None,
+    max_batches: int | None = None,
+    keep_mode: bool = False,
 ) -> dict[str, Any]:
     """Metrics for a model. If ``baseline_count`` is given, also report the MAE/RMSE
     of always predicting that constant (e.g. the train-set median count).
     ``mixed_precision`` runs the forward pass in float16 on CUDA (ignored elsewhere).
     If ``loss_kwargs`` is given, also report ``loss``: the mean per-batch
-    ``compute_loss(outputs, batch, **loss_kwargs)``, so validation needs one pass."""
+    ``compute_loss(outputs, batch, **loss_kwargs)``, so validation needs one pass.
+    ``max_batches`` stops after that many batches. ``keep_mode`` leaves the model's
+    train/eval mode as the caller set it instead of switching to eval (diagnostics:
+    e.g. evaluating with dropout on)."""
     if device is not None:
         model = model.to(device)
-    model.eval()
+    if not keep_mode:
+        model.eval()
     use_amp = mixed_precision and device is not None and device.type == "cuda"
 
     correct_by_type = {t: 0 for t in question_types}
@@ -74,7 +80,9 @@ def evaluate(
     num_batches = 0
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc=desc, leave=False, unit="batch"):
+        for i, batch in enumerate(tqdm(dataloader, desc=desc, leave=False, unit="batch", total=max_batches)):
+            if max_batches is not None and i >= max_batches:
+                break
             unexpected_types = set(batch["question_type"]) - set(question_types) - {"count"}
             if unexpected_types:
                 raise ValueError(

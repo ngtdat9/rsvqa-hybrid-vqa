@@ -28,7 +28,7 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (78 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (79 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
@@ -212,6 +212,10 @@ ran all 10 epochs; the best checkpoint is the last one.
   checkpoint as trained, in float32, and after recomputing BatchNorm statistics, to tell a BatchNorm
   failure from broken weights. Next: diagnose `tune_wide`'s `last.pt`, then rerun it with clipping
   at 1.0 (`tune_wide_clip`).
+- **Diagnosis of `tune_wide`'s `last.pt`:** BatchNorm is ruled out (recomputing its statistics from
+  200 training batches left validation at 46.6%, unchanged), and so is float16 overflow (float32 gives
+  the same 46.6%). The script now also checks dropout (val with dropout on) and train vs val data
+  (train batches in eval mode) to narrow down the remaining causes.
 
 ## Key design decisions
 

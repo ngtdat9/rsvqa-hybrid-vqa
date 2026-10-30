@@ -208,3 +208,22 @@ def test_recalibrate_batchnorm_replaces_corrupted_running_stats():
     assert torch.allclose(model.bn.running_var, expected_var, atol=1e-4)
     assert not model.saw_dropout_training  # only BatchNorm was in train mode
     assert not model.training and not model.bn.training
+
+
+def test_max_batches_and_keep_mode():
+    batch = {
+        "label": torch.tensor([0, 1]),
+        "question_type": ["comp", "comp"],
+        "count_target": torch.tensor([float("nan"), float("nan")]),
+    }
+    wrong = {**batch, "label": torch.tensor([1, 0])}
+    model = FixedOutputModel(class_logits=torch.tensor([[10.0, 0], [0, 10.0]]), count_pred=torch.zeros(2))
+    loader = DataLoader(ListDataset([batch, wrong]), batch_size=None, collate_fn=lambda x: x)
+    assert evaluate(model, loader, max_batches=1)["class_accuracy"] == 1.0
+    assert evaluate(model, loader)["class_accuracy"] == 0.5
+
+    model.train()
+    evaluate(model, loader, keep_mode=True)
+    assert model.training
+    evaluate(model, loader)
+    assert not model.training
