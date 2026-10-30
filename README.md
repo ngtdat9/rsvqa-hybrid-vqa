@@ -175,6 +175,7 @@ ran all 10 epochs; the best checkpoint is the last one.
 |---|---|---|---|---|---|---|
 | `hr_pilot_20261028-131854` (baseline) | 3e-4 | 10 | 10 | 89.7% | 1.04 | 1.443 |
 | `tune_lr1e-3` | 1e-3 | 5 (early stop) | 2 | 81.6% (epoch 4) | 1.69 | 1.061 |
+| `tune_lr1.5e-4` | 1.5e-4 | 10 | 10 | 89.2% | 1.02 | 1.447 |
 
 - **1e-3 is worse than 3e-4.** At every epoch it trails the baseline: by epoch 5 train loss is 0.72
   vs 0.55, validation accuracy 78.6% vs 88.3%, and validation swings again (81.6% → 78.6%). Early
@@ -185,6 +186,18 @@ ran all 10 epochs; the best checkpoint is the last one.
   disable early stopping, so each setting gets its full schedule.
 - Epochs took ~21 min (baseline ~22.4): the single validation pass saves only ~1.5 min per pilot
   epoch, because validation is small next to training.
+- **1.5e-4 ties with 3e-4.** The final validation score is 1.447 vs 1.443: 1.5e-4 has the lower
+  count MAE (1.02 vs 1.04), 3e-4 the higher accuracy (89.7% vs 89.2%). Both differences are well
+  inside the 4-point run-to-run spread seen between the first two pilot runs, so neither is a real
+  win. 1.5e-4 is kept for the next step because it wins on the pre-declared score and because larger
+  models tolerate high learning rates less well (1e-3 was already unstable).
+- **The small model has saturated.** At 1.5e-4, validation accuracy sat at ~89% from epoch 6 on while
+  train loss kept falling, ending equal to validation loss (0.418 vs 0.419). The whole model is only
+  0.9M parameters, so the next run tests capacity.
+- **Next run, `tune_wide`:** the transformer and fusion are widened and deepened (`d_model` 256, 4
+  layers, 8 heads, `ffn_dim` 512, question embedding 256, fusion hidden 512; 3.3M parameters), the CNN
+  stem is unchanged. On a Mac GPU it took ~1.7× as long per step as the base model; widening the CNN as
+  well (3.9M parameters) took ~4×, too slow for the full run, so the CNN is left as is.
 
 ## Key design decisions
 
