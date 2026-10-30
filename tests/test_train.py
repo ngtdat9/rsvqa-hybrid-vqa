@@ -182,3 +182,22 @@ def test_resume_drops_log_lines_newer_than_last_checkpoint(tmp_path):
 
     train({}, resume_dir=run_dir)
     assert [e["epoch"] for e in read_log(run_dir / "checkpoints" / "best.pt")] == [0, 1]
+
+
+def test_grad_norms_logged_and_clipping_caps_updates(tmp_path):
+    from src.train import run_epoch
+
+    config = make_tiny_config(tmp_path)
+    log = read_log(train(config))
+    assert log[0]["grad_norm_max"] >= log[0]["grad_norm_mean"] > 0
+    assert log[0]["skipped_steps"] == 0
+
+    # max norm 0 zeroes every gradient; with no weight decay, Adam then leaves weights unchanged
+    dataloaders = get_dataloaders(config)
+    model = build_model(config)
+    before = [p.detach().clone() for p in model.parameters()]
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2, weight_decay=0.0)
+    stats = run_epoch(model, dataloaders["train"], optimizer, torch.device("cpu"),
+                      {**config, "grad_clip_norm": 0.0})
+    assert stats["grad_norm_mean"] > 0  # reported before clipping
+    assert all(torch.equal(a, b) for a, b in zip(before, model.parameters()))

@@ -145,6 +145,58 @@ def evaluate(
     return result
 
 
+def recalibrate_batchnorm(
+    model: nn.Module, dataloader: DataLoader, device: torch.device, num_batches: int,
+    mixed_precision: bool = False,
+) -> None:
+    """Recompute every BatchNorm layer's running mean/variance from ``num_batches``
+    batches of ``dataloader`` (an equal-weight average, not the training-time moving
+    average). Weights are untouched. If evaluation improves after this, the stored
+    running statistics, not the weights, were what broke eval-mode predictions."""
+    bn_layers = [m for m in model.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+    for bn in bn_layers:
+        bn.reset_running_stats()
+        bn.momentum = None  # cumulative average over the batches below
+    model.to(device).eval()
+    for bn in bn_layers:
+        bn.train()  # only BatchNorm in train mode: dropout stays off
+    use_amp = mixed_precision and device.type == "cuda"
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(dataloader, desc="recalibrate BatchNorm", total=num_batches,
+                                       leave=False, unit="batch")):
+            if i >= num_batches:
+                break
+            batch = prepare_batch(batch, device, dataloader.dataset)
+            with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+                model(batch)
+    model.eval()
+
+
+def load_run(
+    run_dir: Path, config: dict[str, Any], checkpoint_name: str = "best.pt",
+) -> tuple[nn.Module, dict[str, DataLoader], torch.device]:
+    """Rebuild a run's model from ``checkpoints/<checkpoint_name>`` plus data loaders
+    for ``config``. Model shape comes from the checkpoint; file locations from ``config``."""
+    from src.data_pipeline import get_dataloaders
+    from src.train import build_model, get_device
+
+    device = get_device()
+    checkpoint = torch.load(run_dir / "checkpoints" / checkpoint_name, map_location=device, weights_only=False)
+    ckpt_config = dict(checkpoint.get("config", config))
+    # checkpoints saved before the fusion_type option existed are the concat baseline
+    ckpt_config.setdefault("fusion_type", "concat")
+    # Model and data must agree on image size, question length and answer vocab, so
+    # take those from the checkpoint; file locations come from the live config.
+    shape_keys = ("image_size", "max_question_len", "vocab_size")
+    eval_config = {**config, **{k: ckpt_config[k] for k in shape_keys}}
+    model_config = {**ckpt_config, "data_dir": config["data_dir"], "raw_dir": config["raw_dir"]}
+
+    dataloaders = get_dataloaders(eval_config)
+    model = build_model(model_config)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    return model.to(device), dataloaders, device
+
+
 def render_markdown_table(metrics: dict[str, Any]) -> str:
     lines = [
         "| Metric | Value |",
@@ -162,27 +214,11 @@ def render_markdown_table(metrics: dict[str, Any]) -> str:
 
 
 def _main() -> None:
-    from src.data_pipeline import get_dataloaders
-    from src.train import build_model, get_device
-
     run_dir = Path(sys.argv[1])
     config_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("configs/model_config.yaml")
     config = yaml.safe_load(config_path.read_text())
 
-    device = get_device()
-    checkpoint = torch.load(run_dir / "checkpoints" / "best.pt", map_location=device, weights_only=False)
-    ckpt_config = dict(checkpoint.get("config", config))
-    # checkpoints saved before the fusion_type option existed are the concat baseline
-    ckpt_config.setdefault("fusion_type", "concat")
-    # Model and data must agree on image size, question length and answer vocab, so
-    # take those from the checkpoint; file locations come from the live config.
-    shape_keys = ("image_size", "max_question_len", "vocab_size")
-    eval_config = {**config, **{k: ckpt_config[k] for k in shape_keys}}
-    model_config = {**ckpt_config, "data_dir": config["data_dir"], "raw_dir": config["raw_dir"]}
-
-    dataloaders = get_dataloaders(eval_config)
-    model = build_model(model_config)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model, dataloaders, device = load_run(run_dir, config)
 
     baseline_count = train_count_median(dataloaders["train"])
     # every test-like split (HR has two: "test" and the Philadelphia "test_phili")

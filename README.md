@@ -28,7 +28,7 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (76 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (78 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
@@ -176,6 +176,7 @@ ran all 10 epochs; the best checkpoint is the last one.
 | `hr_pilot_20261028-131854` (baseline) | 3e-4 | 10 | 10 | 89.7% | 1.04 | 1.443 |
 | `tune_lr1e-3` | 1e-3 | 5 (early stop) | 2 | 81.6% (epoch 4) | 1.69 | 1.061 |
 | `tune_lr1.5e-4` | 1.5e-4 | 10 | 10 | 89.2% | 1.02 | 1.447 |
+| `tune_wide` | 1.5e-4 | 10 | 2 | 85.8% (epoch 3) | 1.47 | 1.208 |
 
 - **1e-3 is worse than 3e-4.** At every epoch it trails the baseline: by epoch 5 train loss is 0.72
   vs 0.55, validation accuracy 78.6% vs 88.3%, and validation swings again (81.6% → 78.6%). Early
@@ -198,6 +199,19 @@ ran all 10 epochs; the best checkpoint is the last one.
   layers, 8 heads, `ffn_dim` 512, question embedding 256, fusion hidden 512; 3.3M parameters), the CNN
   stem is unchanged. On a Mac GPU it took ~1.7× as long per step as the base model; widening the CNN as
   well (3.9M parameters) took ~4×, too slow for the full run, so the CNN is left as is.
+- **`tune_wide` failed: training became unstable after epoch 3.** It led the small model for the first
+  3 epochs (85.8% vs 84.7% validation accuracy at epoch 3), then train loss rose (0.67 → 0.72) while
+  the LR was decaying, and validation collapsed to 39–51% for the rest of the run (validation loss
+  up to 4.7 while train loss stayed ~0.70). It says nothing yet about whether capacity helps.
+  Two separate symptoms: the rising train loss is an optimization instability (the transformer is
+  post-norm, with no gradient clipping); the far larger collapse in eval mode than in train mode
+  points at the CNN's BatchNorm running statistics, the main layer that behaves differently in the two
+  modes. Epochs took ~23 min, only ~5% longer than the small model on the T4.
+- Added: gradient-norm logging per epoch (`grad_norm_mean`, `grad_norm_max`, `skipped_steps` in
+  `log.jsonl`), optional clipping (`grad_clip_norm`), and `scripts/diagnose_run.py`, which evaluates a
+  checkpoint as trained, in float32, and after recomputing BatchNorm statistics, to tell a BatchNorm
+  failure from broken weights. Next: diagnose `tune_wide`'s `last.pt`, then rerun it with clipping
+  at 1.0 (`tune_wide_clip`).
 
 ## Key design decisions
 

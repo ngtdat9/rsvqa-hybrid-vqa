@@ -176,3 +176,35 @@ def test_loss_kwargs_adds_mean_loss_matching_compute_loss():
     expected = compute_loss(model(batch), batch, count_transform="log1p").item()
     assert result["loss"] == pytest.approx(expected)
     assert "loss" not in evaluate(model, make_dataloader(batch))
+
+
+class BatchNormOnly(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bn = nn.BatchNorm1d(2)
+        self.drop = nn.Dropout(0.5)
+
+    def forward(self, batch: dict) -> dict[str, torch.Tensor]:
+        self.saw_dropout_training = self.drop.training
+        return {"class_logits": self.bn(batch["image"])}
+
+
+def test_recalibrate_batchnorm_replaces_corrupted_running_stats():
+    from src.evaluate import recalibrate_batchnorm
+
+    torch.manual_seed(0)
+    data = torch.randn(64, 2) * torch.tensor([3.0, 0.5]) + torch.tensor([10.0, -2.0])
+    batches = [{"image": chunk} for chunk in data.split(16)]
+    loader = DataLoader(ListDataset(batches), batch_size=None, collate_fn=lambda x: x)
+
+    model = BatchNormOnly()
+    model.bn.running_mean.fill_(1e4)  # what a collapsed run's stats might look like
+    model.bn.running_var.fill_(1e6)
+    recalibrate_batchnorm(model, loader, torch.device("cpu"), num_batches=4)
+
+    assert torch.allclose(model.bn.running_mean, data.mean(0), atol=1e-4)
+    # equal-weight average of the 4 per-batch (unbiased) variances
+    expected_var = torch.stack([b["image"].var(0) for b in batches]).mean(0)
+    assert torch.allclose(model.bn.running_var, expected_var, atol=1e-4)
+    assert not model.saw_dropout_training  # only BatchNorm was in train mode
+    assert not model.training and not model.bn.training

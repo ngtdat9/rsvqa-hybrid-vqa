@@ -53,6 +53,7 @@ lr_schedule: cosine
 warmup_fraction: 0.05
 seed: 0                                # weight init, shuffle order, dropout
 mixed_precision: true                  # float16 math on CUDA (the T4 was the bottleneck); ignored on CPU
+grad_clip_norm: null                   # max gradient L2 norm (e.g. 1.0); null = no clipping
 # How best.pt and early stopping judge an epoch. score = val accuracy +
 # (1 - val count MAE / median-baseline MAE), higher is better. val_loss = combined loss.
 selection_metric: score

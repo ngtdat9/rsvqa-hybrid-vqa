@@ -45,6 +45,7 @@ lr_schedule: cosine        # cosine (warmup, then decay to 0) or constant; see h
 warmup_fraction: 0.05
 seed: 0
 mixed_precision: true      # float16 math on CUDA only; ignored on CPU/MPS
+grad_clip_norm: null       # max gradient L2 norm (e.g. 1.0); null = no clipping
 selection_metric: score    # score (val accuracy + count gain over median) or val_loss
 epochs: 5
 optimizer: adamw

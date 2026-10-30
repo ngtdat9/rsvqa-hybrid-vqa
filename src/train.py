@@ -109,14 +109,23 @@ def run_epoch(
     desc: str = "",
     scheduler: LambdaLR | None = None,
     scaler: torch.amp.GradScaler | None = None,
-) -> float:
-    """One pass over ``dataloader``; trains when ``optimizer`` is given. Returns mean loss."""
+) -> dict[str, float]:
+    """One pass over ``dataloader``; trains when ``optimizer`` is given.
+
+    Returns the mean ``loss``; when training, also gradient-norm statistics (norms
+    before clipping, so instability shows even when ``grad_clip_norm`` caps it):
+    ``grad_norm_mean``/``grad_norm_max`` over finite steps, and ``skipped_steps``,
+    the steps whose gradients overflowed (mixed precision skips those updates).
+    """
     model.train(optimizer is not None)
     use_amp = config["mixed_precision"] and device.type == "cuda"
     if scaler is None:
         scaler = torch.amp.GradScaler("cuda", enabled=False)  # plain backward/step
     total_loss = 0.0
     num_batches = 0
+    clip = config.get("grad_clip_norm")
+    grad_norms: list[float] = []
+    skipped_steps = 0
 
     progress = tqdm(dataloader, desc=desc, leave=False, unit="batch")
     context = torch.enable_grad() if optimizer is not None else torch.no_grad()
@@ -134,6 +143,14 @@ def run_epoch(
             if optimizer is not None:
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)  # true gradient scale, for the norm and clipping
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), clip if clip is not None else math.inf
+                ).item()
+                if math.isfinite(grad_norm):
+                    grad_norms.append(grad_norm)
+                else:
+                    skipped_steps += 1
                 scaler.step(optimizer)
                 scaler.update()
                 if scheduler is not None:
@@ -143,7 +160,12 @@ def run_epoch(
             num_batches += 1
             progress.set_postfix(avg_loss=total_loss / num_batches)
 
-    return total_loss / num_batches
+    stats = {"loss": total_loss / num_batches}
+    if optimizer is not None:
+        stats["grad_norm_mean"] = sum(grad_norms) / len(grad_norms) if grad_norms else math.nan
+        stats["grad_norm_max"] = max(grad_norms) if grad_norms else math.nan
+        stats["skipped_steps"] = skipped_steps
+    return stats
 
 
 def train(config: dict[str, Any], resume_dir: Path | None = None) -> Path:
@@ -220,10 +242,11 @@ def train(config: dict[str, Any], resume_dir: Path | None = None) -> Path:
     with open(log_path, "a") as log_file:
         for epoch in tqdm(range(start_epoch, epochs), desc="Epochs", unit="epoch",
                           initial=start_epoch, total=epochs):
-            train_loss = run_epoch(
+            train_stats = run_epoch(
                 model, dataloaders["train"], optimizer, device, config,
                 desc=f"Epoch {epoch + 1}/{epochs} [train]", scheduler=scheduler, scaler=scaler,
             )
+            train_loss = train_stats["loss"]
             val_metrics = evaluate(
                 model, dataloaders["val"], device,
                 baseline_count=baseline_count, question_types=config["question_types"],
@@ -237,7 +260,8 @@ def train(config: dict[str, Any], resume_dir: Path | None = None) -> Path:
             tqdm.write(
                 f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
                 f"val_class_acc={val_metrics['class_accuracy']:.4f} val_count_mae={val_metrics['count_mae']:.4f} "
-                f"val_score={val_score:.4f} lr={lr:.2e}"
+                f"val_score={val_score:.4f} lr={lr:.2e} grad_norm_max={train_stats['grad_norm_max']:.2f} "
+                f"skipped_steps={train_stats['skipped_steps']}"
             )
 
             log_entry = {
@@ -250,6 +274,9 @@ def train(config: dict[str, Any], resume_dir: Path | None = None) -> Path:
                 "val_count_mae_baseline": val_metrics.get("count_mae_baseline"),
                 "val_score": val_score,
                 "lr": lr,
+                "grad_norm_mean": train_stats["grad_norm_mean"],
+                "grad_norm_max": train_stats["grad_norm_max"],
+                "skipped_steps": train_stats["skipped_steps"],
                 "timestamp": datetime.now().isoformat(),
             }
             log_file.write(json.dumps(log_entry) + "\n")
