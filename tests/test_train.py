@@ -108,8 +108,10 @@ def test_lr_follows_the_schedule_during_training(tmp_path):
     assert log[1]["lr"] == pytest.approx(0.0, abs=peak * 1e-6)  # decayed to 0 at the last step
 
 
-@pytest.mark.parametrize("key, value", [("lr_schedule", "linear"), ("selection_metric", "accuracy")])
-def test_unknown_schedule_or_selection_metric_rejected(tmp_path, key, value):
+@pytest.mark.parametrize(
+    "key, value", [("lr_schedule", "linear"), ("selection_metric", "accuracy"), ("optimizer", "sgd")]
+)
+def test_unknown_schedule_selection_metric_or_optimizer_rejected(tmp_path, key, value):
     with pytest.raises(ValueError, match=key):
         train({**make_tiny_config(tmp_path), key: value})
 

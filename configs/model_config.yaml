@@ -48,7 +48,7 @@ mixed_precision: true      # float16 math on CUDA only; ignored on CPU/MPS
 grad_clip_norm: null       # max gradient L2 norm (e.g. 1.0); null = no clipping
 selection_metric: score    # score (val accuracy + count gain over median) or val_loss
 epochs: 5
-optimizer: adamw
+optimizer: adamw           # only adamw is implemented; anything else is rejected
 early_stopping_patience: 3
 experiments_dir: experiments
 experiment_name: week2_crossattn   # train.py appends a timestamp to form the run dir

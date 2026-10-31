@@ -22,6 +22,7 @@ from src.models.vqa_head import HybridVQAModel, compute_loss
 
 LR_SCHEDULES = ("cosine", "constant")
 SELECTION_METRICS = ("score", "val_loss")
+OPTIMIZERS = ("adamw",)
 
 
 def set_seed(seed: int) -> None:
@@ -189,6 +190,8 @@ def train(config: dict[str, Any], resume_dir: Path | None = None) -> Path:
     selection = config["selection_metric"]
     if selection not in SELECTION_METRICS:
         raise ValueError(f"selection_metric must be one of {SELECTION_METRICS}, got {selection!r}")
+    if config["optimizer"] not in OPTIMIZERS:
+        raise ValueError(f"optimizer must be one of {OPTIMIZERS}, got {config['optimizer']!r}")
 
     dataloaders = get_dataloaders(config)
     # Seed after the data loaders: building the image cache draws worker seeds from the

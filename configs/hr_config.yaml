@@ -58,7 +58,7 @@ grad_clip_norm: null                   # max gradient L2 norm (e.g. 1.0); null =
 # (1 - val count MAE / median-baseline MAE), higher is better. val_loss = combined loss.
 selection_metric: score
 epochs: 10
-optimizer: adamw
+optimizer: adamw                       # only adamw is implemented; anything else is rejected
 early_stopping_patience: 3
 experiments_dir: experiments
 experiment_name: hr_pilot
