@@ -222,9 +222,14 @@ def render_markdown_table(metrics: dict[str, Any]) -> str:
 
 
 def _main() -> None:
-    run_dir = Path(sys.argv[1])
-    config_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("configs/model_config.yaml")
+    # python -m src.evaluate <run_dir> [config_path] [--full]
+    # --full: evaluate on the complete test splits, ignoring the config's pilot subset
+    args = [a for a in sys.argv[1:] if a != "--full"]
+    run_dir = Path(args[0])
+    config_path = Path(args[1]) if len(args) > 1 else Path("configs/model_config.yaml")
     config = yaml.safe_load(config_path.read_text())
+    if "--full" in sys.argv[1:]:
+        config["max_images_per_split"] = None
 
     model, dataloaders, device = load_run(run_dir, config)
 

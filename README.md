@@ -58,9 +58,10 @@ two: one for the loss, one for the metrics), and a run cut off by a disconnect c
 its `last.pt` (`python -m src.train --resume <run_dir>`, or `RESUME` in the Colab notebook), with the
 same model, optimizer, schedule, early-stopping and random state.
 
-**Next:** Week 3 tuning on the pilot subset is nearly done (see Week 3 tuning below): learning rate
-1.5e-4, small model. Remaining: 2 extra seeds to measure run-to-run spread, then the full run on all
-6,251 train tiles.
+**Next:** Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. Next is
+the Week 4 full run (`hr_full` in the Colab notebook): the same config on all 6,251 train tiles, 10
+epochs without early stopping, then evaluation on the complete test sets
+(`python -m src.evaluate <run_dir> configs/hr_config.yaml --full`).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -178,6 +179,8 @@ ran all 10 epochs; the best checkpoint is the last one.
 | `tune_lr1.5e-4` | 1.5e-4 | 10 | 10 | 89.2% | 1.02 | 1.447 |
 | `tune_wide` | 1.5e-4 | 10 | 2 | 85.8% (epoch 3) | 1.47 | 1.208 |
 | `tune_wide_clip` | 1.5e-4 | 10 | 2 | 85.6% (epoch 2) | 1.36 | 1.266 |
+| `tune_lr1.5e-4_seed1` | 1.5e-4 | 10 | 7 | 89.2% | 1.02 | 1.450 |
+| `tune_lr1.5e-4_seed2` | 1.5e-4 | 10 | 6 | 88.7% | 1.00 | 1.453 |
 
 - **1e-3 is worse than 3e-4.** At every epoch it trails the baseline: by epoch 5 train loss is 0.72
   vs 0.55, validation accuracy 78.6% vs 88.3%, and validation swings again (81.6% → 78.6%). Early
@@ -229,6 +232,19 @@ ran all 10 epochs; the best checkpoint is the last one.
   pre-norm transformer, `norm_first=True`) is an architecture change that would need its own tuning
   round. Left as future work. Next: 2 more seeds of the small model at 1.5e-4, to measure the
   run-to-run spread, then the full run.
+- **Run-to-run spread (seeds 0, 1, 2 at 1.5e-4) is small:** best validation score 1.447 / 1.450 /
+  1.453, final-epoch accuracy 89.2 / 89.2 / 89.1%, final count MAE 1.02 / 1.04 / 1.02. The 4-point gap
+  between the first two pilot runs came from the old setup (constant LR, early stopping on a noisy
+  validation loss), not from seeds. Gradient norms in the small model stayed at ~4 on average (max
+  42), against the larger model's ~88 (max ~12,000).
+- **Learning rate, re-read with that spread:** 3e-4's final accuracy (89.7%) is ~0.5 points above all
+  three 1.5e-4 seeds (89.1-89.2%), several times the seed spread, so that gap is probably real; its
+  score (1.443) is below all three (1.447-1.453), because 1.5e-4 has the lower count MAE. The two rates
+  trade classification against count. 1.5e-4 stays, because the selection score was fixed before
+  tuning; switching to accuracy now, after seeing the results, would be choosing the metric to fit the
+  outcome. (3e-4 was run with one seed only.)
+- **Tuned config for the full run:** the small model, peak LR 1.5e-4, cosine schedule, 10 epochs,
+  everything else as in `configs/hr_config.yaml`.
 
 ## Key design decisions
 
