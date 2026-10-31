@@ -58,9 +58,9 @@ two: one for the loss, one for the metrics), and a run cut off by a disconnect c
 its `last.pt` (`python -m src.train --resume <run_dir>`, or `RESUME` in the Colab notebook), with the
 same model, optimizer, schedule, early-stopping and random state.
 
-**Next:** Week 3 tuning on the pilot subset, judged on validation only: learning rate (1.5e-4, 1e-3
-vs 3e-4), then model size, then 2 extra seeds of the winner to measure run-to-run spread. Then the
-full run on all 6,251 train tiles.
+**Next:** Week 3 tuning on the pilot subset is nearly done (see Week 3 tuning below): learning rate
+1.5e-4, small model. Remaining: 2 extra seeds to measure run-to-run spread, then the full run on all
+6,251 train tiles.
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -177,6 +177,7 @@ ran all 10 epochs; the best checkpoint is the last one.
 | `tune_lr1e-3` | 1e-3 | 5 (early stop) | 2 | 81.6% (epoch 4) | 1.69 | 1.061 |
 | `tune_lr1.5e-4` | 1.5e-4 | 10 | 10 | 89.2% | 1.02 | 1.447 |
 | `tune_wide` | 1.5e-4 | 10 | 2 | 85.8% (epoch 3) | 1.47 | 1.208 |
+| `tune_wide_clip` | 1.5e-4 | 10 | 2 | 85.6% (epoch 2) | 1.36 | 1.266 |
 
 - **1e-3 is worse than 3e-4.** At every epoch it trails the baseline: by epoch 5 train loss is 0.72
   vs 0.55, validation accuracy 78.6% vs 88.3%, and validation swings again (81.6% → 78.6%). Early
@@ -216,6 +217,18 @@ ran all 10 epochs; the best checkpoint is the last one.
   200 training batches left validation at 46.6%, unchanged), and so is float16 overflow (float32 gives
   the same 46.6%). The script now also checks dropout (val with dropout on) and train vs val data
   (train batches in eval mode) to narrow down the remaining causes.
+- **`tune_wide_clip` (same, with gradient clipping at 1.0) collapsed at epoch 3 as well**, recovering
+  only to ~76% validation accuracy, while its train loss kept falling (0.54 at the end vs 1.05 val
+  loss). The new gradient log shows why clipping could not prevent it: unclipped gradient norms grew
+  from ~4 on average (max 174) in epoch 1 to ~88 on average (max ~12,000) by epochs 4-6, so clipping at
+  1.0 capped nearly every step. Something inside the larger model diverges; clipping only limits how
+  fast the weights move.
+- **Decision: keep the small model.** Two attempts at the larger model failed at the same point, while
+  the small model trained stably in every HR run. The larger model led for its first 2-3 epochs
+  (85.6% vs 80.8% at epoch 2), so capacity may still help, but making it train stably (e.g. a
+  pre-norm transformer, `norm_first=True`) is an architecture change that would need its own tuning
+  round. Left as future work. Next: 2 more seeds of the small model at 1.5e-4, to measure the
+  run-to-run spread, then the full run.
 
 ## Key design decisions
 
