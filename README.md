@@ -58,10 +58,12 @@ two: one for the loss, one for the metrics), and a run cut off by a disconnect c
 its `last.pt` (`python -m src.train --resume <run_dir>`, or `RESUME` in the Colab notebook), with the
 same model, optimizer, schedule, early-stopping and random state.
 
-**Next:** Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. Next is
-the Week 4 full run (`hr_full` in the Colab notebook): the same config on all 6,251 train tiles, 10
-epochs without early stopping, then evaluation on the complete test sets
-(`python -m src.evaluate <run_dir> configs/hr_config.yaml --full`).
+Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. The Week 4 full
+run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
+
+**Next:** evaluate the pilot run `tune_lr1.5e-4_20261029-101754` on the complete test sets (`EVAL_RUN`
+in the notebook's step 6), so the pilot-vs-full comparison uses the same test tiles; then Week 5 (CLIP
+baseline, XAI).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -245,6 +247,46 @@ ran all 10 epochs; the best checkpoint is the last one.
   outcome. (3e-4 was run with one seed only.)
 - **Tuned config for the full run:** the small model, peak LR 1.5e-4, cosine schedule, 10 epochs,
   everything else as in `configs/hr_config.yaml`.
+
+### HR full run (all 6,251 train tiles, Colab T4)
+
+Run `hr_full_20261031-090319`, 2026-10-31: the tuned config (small model, peak LR 1.5e-4, cosine
+schedule) on the full training split, 10 epochs, no early stopping. ~86 min per epoch, 14.4 h in total.
+Full report: [`reports/baseline_results_hr_full_20261031-090319.md`](reports/baseline_results_hr_full_20261031-090319.md).
+
+Validation (full val split) by epoch:
+
+| Epoch | Val accuracy | Val count MAE | Val score |
+|---|---|---|---|
+| 1 | 85.9% | 1.09 | 1.373 |
+| 2 | 89.2% | 0.91 | 1.484 |
+| 5 | 90.2% | 0.89 | 1.506 |
+| 8 | 90.7% | 0.87 | 1.521 |
+| 10 (best) | 90.7% | 0.87 | 1.522 |
+
+Test results, complete test sets (2,226 + 1,056 tiles):
+
+| Metric | `test` | `test_phili` |
+|---|---|---|
+| Accuracy (overall) | 90.2% | 76.9% |
+| Accuracy (presence) | 91.7% | 80.2% |
+| Accuracy (comp) | 90.9% | 79.6% |
+| Accuracy (area) | 86.1% | 64.8% |
+| Count MAE (median baseline) | 0.91 (2.16) | 4.90 (5.25) |
+| Count RMSE (median baseline) | 2.34 (5.42) | 13.58 (14.10) |
+
+- **Training was stable.** Validation improved almost every epoch; the best epoch is the last one, with
+  train and validation loss still close (0.325 / 0.348), so no sign of over-fitting. Gradient norms
+  stayed at ~3.5-4 on average (max 37), as in the pilot. 7-10 skipped steps per epoch out of ~19,500
+  are the mixed-precision loss scaler's normal overflow checks.
+- **In-distribution test improved with the full data:** 90.2% accuracy and count MAE 0.91, against the
+  pilot's 88.5% and 1.14 (the pilot's numbers are on 300-tile test subsets, so the comparison is
+  approximate until the pilot is evaluated on the complete test sets).
+- **Philadelphia is much worse than the in-distribution test:** 76.9% vs 90.2%, and area questions only
+  64.8%. Count on Philadelphia barely beats always predicting the median (MAE 4.90 vs 5.25). The pilot
+  run scored 81.3% on a 300-tile Philadelphia subset; whether the full run is really worse there, or the
+  subset was easier, is open until the pilot is evaluated on the complete Philadelphia set. This is the
+  main generalization result for the Week 7 error analysis.
 
 ## Key design decisions
 
