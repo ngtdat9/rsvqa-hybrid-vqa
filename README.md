@@ -17,7 +17,7 @@ follows.
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
-<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="847">
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="765">
 
 <details><summary>Table as text</summary>
 
@@ -30,7 +30,8 @@ follows.
 | `src/evaluate.py` | Done — accuracy by question type, count MAE/RMSE, constant-baseline comparison, multi-split reports (HR has two test sets) |
 | `configs/hr_config.yaml` | Done — HR dataset layout, area ranges, tuned training settings |
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
-| `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
+| `src/models/clip_baseline.py` | Done: zero-shot CLIP on the complete test sets |
+| `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
 </details>
 
@@ -67,7 +68,7 @@ same model, optimizer, schedule, early-stopping and random state.
 Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. The Week 4 full
 run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
 
-**Next:** Week 5 (CLIP baseline, XAI).
+**Next:** Week 5 (XAI).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -362,6 +363,41 @@ complete test sets. One seed each.
   a different learning rate. Most of its 3.7-point lead over this pilot's 77.6% can't be separated between
   the two, as Run 3 was not evaluated on the complete set.
 
+### CLIP baseline (zero-shot, complete test sets)
+
+`openai/clip-vit-large-patch14` with no training on RSVQA: for each question it scores one sentence per
+candidate answer against the tile and takes the best. Candidates come from the train split, the sentence
+template was chosen on validation, and each test set was scored once. Report:
+`reports/baseline_results_clip_vit-large-patch14.md`.
+
+<img src="reports/figures/table_11.png" alt="CLIP baseline (zero-shot, complete test sets): Metric, test ours, test CLIP, test trivial, test_phili ours, test_phili CLIP, test_phili trivial" width="864">
+
+<details><summary>Table as text</summary>
+
+| Metric | `test` ours | `test` CLIP | `test` trivial | `test_phili` ours | `test_phili` CLIP | `test_phili` trivial |
+|---|---|---|---|---|---|---|
+| Accuracy (overall) | 90.2% | 49.5% | 63.7% | 76.9% | 55.0% | 61.5% |
+| Accuracy (presence) | 91.7% | 53.2% | 60.8% | 80.2% | 55.8% | 57.3% |
+| Accuracy (comp) | 90.9% | 49.6% | 66.6% | 79.6% | 57.4% | 66.6% |
+| Accuracy (area) | 86.1% | 42.7% | 62.4% | 64.8% | 48.0% | 57.4% |
+| Count MAE | 0.91 | 14.13 | 2.16 | 4.90 | 11.33 | 5.25 |
+| Count RMSE | 2.34 | 20.37 | 5.42 | 13.58 | 17.31 | 14.10 |
+
+</details>
+
+"Trivial" always gives the most common train answer for the question type, or the train median for count.
+
+- **Zero-shot CLIP is below the trivial guess on every question type, in both test sets.** Our model leads
+  CLIP by 40.8 points on `test` and 21.9 on `test_phili`.
+- **This is a low bar.** It mainly shows that a model trained on this task beats an untrained general one.
+  It does not show that our architecture is better than a CLIP-based model fine-tuned on RSVQA.
+- **The comparison is not like for like.** CLIP sees 224×224 (about 34 cm per pixel, against our 15 cm),
+  which works against it. It only chooses among answers valid for the question type, which works for it.
+- **Template choice.** The selection score was dominated by count error, but the chosen template
+  `{question} {answer}` also had the best validation accuracy (48.8%, against 39.9% and 43.7%), so that
+  weighting did not change the choice.
+- **Unexplained:** CLIP scores 5.5 points higher on `test_phili` than on `test`, while our model drops 13.4.
+
 ## Key design decisions
 
 - **Count questions are a regression target**, not a classification bucket.
@@ -491,7 +527,7 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
-<img src="reports/figures/table_11.png" alt="Configuration: Key, Meaning" width="859">
+<img src="reports/figures/table_12.png" alt="Configuration: Key, Meaning" width="859">
 
 <details><summary>Table as text</summary>
 
@@ -529,7 +565,7 @@ src/
 ├── models/
 │   ├── hybrid_encoder.py  # CNN stem + Transformer encoder
 │   ├── vqa_head.py        # question encoder, fusion (concat/cross-attention), dual heads, loss
-│   └── clip_baseline.py   # zero-shot CLIP comparison (not started)
+│   └── clip_baseline.py   # zero-shot CLIP comparison
 ├── rag/                   # retrieval + LLM explanation layer (not started)
 ├── train.py
 ├── evaluate.py
