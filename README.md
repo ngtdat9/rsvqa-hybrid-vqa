@@ -17,6 +17,10 @@ follows.
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="847">
+
+<details><summary>Table as text</summary>
+
 | Module | Status |
 |---|---|
 | `src/data_pipeline.py` | Done — dataset-agnostic (LR and HR via config), train-only vocab/norm-stat fitting, streaming `Dataset`, pilot-subset sampling |
@@ -24,11 +28,13 @@ follows.
 | `src/models/vqa_head.py` | Done — question encoder, two fusion modes (concat / cross-attention), classification + count-regression heads |
 | `src/train.py` | Done — training loop, checkpointing, early stopping, JSON-lines logging, config-path CLI arg |
 | `src/evaluate.py` | Done — accuracy by question type, count MAE/RMSE, constant-baseline comparison, multi-split reports (HR has two test sets) |
-| `configs/hr_config.yaml` | Drafted — several values (`images_subdir`, `image_ext`, `question_types`, `max_question_len`) still marked `VERIFY` pending a real HR download |
+| `configs/hr_config.yaml` | Done — HR dataset layout, area ranges, tuned training settings |
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py`, `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
 
-Run `pytest tests/ -v` to verify (79 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+</details>
+
+Run `pytest tests/ -v` to verify (80 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
@@ -67,6 +73,10 @@ run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
 
 See [`reports/baseline_results_week1_baseline_20261014-130407.md`](reports/baseline_results_week1_baseline_20261014-130407.md).
 
+<img src="reports/figures/table_02.png" alt="Week 1 baseline results (RSVQA-LR, 5 epochs, GPU): Metric, Value" width="341">
+
+<details><summary>Table as text</summary>
+
 | Metric | Value |
 |---|---|
 | Classification accuracy (overall) | 73.2% |
@@ -75,6 +85,8 @@ See [`reports/baseline_results_week1_baseline_20261014-130407.md`](reports/basel
 | — presence | 84.8% |
 | Count MAE | 193.6 |
 | Count RMSE | 732.5 |
+
+</details>
 
 **Known issue found here, since fixed:** the count-regression head barely
 learned — `val_class_acc` climbed steadily across epochs (55.5% → 75.7%)
@@ -94,12 +106,18 @@ concat` for the ablation).
 Validation results from `week2_crossattn` (stopped early after 10 of 15 epochs; best checkpoint
 at epoch 7). Test-set numbers not run yet.
 
+<img src="reports/figures/table_03.png" alt="Week 2 LR re-run (log1p count loss + cross-attention, GPU): Metric (validation, best checkpoint), Week 1, Week 2" width="571">
+
+<details><summary>Table as text</summary>
+
 | Metric (validation, best checkpoint) | Week 1 | Week 2 |
 |---|---|---|
 | Combined loss | ~750,000 | **1.52** |
 | Classification accuracy | 74.2% | **78.3%** |
 | Count MAE | 192.4 | **167.5** |
 | Count MAE, always predicting the train median | — | 205.5 |
+
+</details>
 
 The loss is now on a sane scale and the count head beats the median baseline by ~18%, but count
 predictions are still weak in absolute terms. LR counts are very skewed (median 6, max 16,640), so a
@@ -113,6 +131,10 @@ See [`reports/baseline_results_hr_pilot_20261024-073555.md`](reports/baseline_re
 Early stopping ended training after 5 epochs; the best checkpoint is from epoch 2. Test sets are the
 pilot's 300-tile subsets (~30,000 questions each), so treat these as early signals, not final results.
 
+<img src="reports/figures/table_04.png" alt="HR pilot results (1,500 train tiles, Colab T4): Metric, test, test_phili (Philadelphia), Majority / median baseline (train)" width="825">
+
+<details><summary>Table as text</summary>
+
 | Metric | test | test_phili (Philadelphia) | Majority / median baseline (train) |
 |---|---|---|---|
 | Classification accuracy (overall) | **82.7%** | 76.8% | ~63% |
@@ -120,6 +142,8 @@ pilot's 300-tile subsets (~30,000 questions each), so treat these as early signa
 | — comp | 78.1% | 75.6% | 66.7% (`no`) |
 | — area (5 ranges) | 81.4% | 70.8% | 60.7% (`0m2`) |
 | Count MAE | **1.50** | 4.57 | 2.23 / 4.96 (median) |
+
+</details>
 
 - Every question type clearly beats always giving the most common answer; comp is the hardest.
 - `test_phili`, from a city the model never saw, is ~6 points lower, and its count MAE barely beats
@@ -132,12 +156,18 @@ pilot's 300-tile subsets (~30,000 questions each), so treat these as early signa
 [`reports/baseline_results_hr_pilot_20261027-131100.md`](reports/baseline_results_hr_pilot_20261027-131100.md)):
 early stopping ended it after 7 epochs, best checkpoint from epoch 4.
 
+<img src="reports/figures/table_05.png" alt="HR pilot results (1,500 train tiles, Colab T4): Run 1, Run 2" width="383">
+
+<details><summary>Table as text</summary>
+
 | | Run 1 | Run 2 |
 |---|---|---|
 | test accuracy (overall) | 82.7% | 87.0% |
 | test count MAE | 1.50 | 1.28 |
 | test_phili accuracy (overall) | 76.8% | 83.3% |
 | test_phili count MAE | 4.57 | 4.46 |
+
+</details>
 
 Nothing that affects learning changed between the runs, so the 4–6 point gap is **run-to-run
 variation**: random initialization and shuffling, and above all which epoch early stopping kept
@@ -149,6 +179,10 @@ which is now the bottleneck (data loading reaches ~726 images/s).
 [`reports/baseline_results_hr_pilot_20261028-131854.md`](reports/baseline_results_hr_pilot_20261028-131854.md)):
 ran all 10 epochs; the best checkpoint is the last one.
 
+<img src="reports/figures/table_06.png" alt="HR pilot results (1,500 train tiles, Colab T4): Run 2, Run 3" width="576">
+
+<details><summary>Table as text</summary>
+
 | | Run 2 | Run 3 |
 |---|---|---|
 | test accuracy (overall) | 87.0% | **88.5%** |
@@ -157,6 +191,8 @@ ran all 10 epochs; the best checkpoint is the last one.
 | test_phili accuracy (overall) | **83.3%** | 81.3% |
 | — area | **76.1%** | 70.7% |
 | test_phili count MAE | 4.46 | 4.41 |
+
+</details>
 
 - Validation accuracy rose every epoch (78.2% → 89.7%) and count MAE fell except for one small step
   back at epoch 5; the swings of run 2 are gone. Train loss stayed above validation loss (dropout is
@@ -172,6 +208,10 @@ ran all 10 epochs; the best checkpoint is the last one.
 
 ### Week 3 tuning (HR pilot, validation only)
 
+<img src="reports/figures/table_07.png" alt="Week 3 tuning (HR pilot, validation only): Run, Peak LR, Epochs run, Best epoch, Best val accuracy, Val count MAE (best epoch), Best val score" width="878">
+
+<details><summary>Table as text</summary>
+
 | Run | Peak LR | Epochs run | Best epoch | Best val accuracy | Val count MAE (best epoch) | Best val score |
 |---|---|---|---|---|---|---|
 | `hr_pilot_20261028-131854` (baseline) | 3e-4 | 10 | 10 | 89.7% | 1.04 | 1.443 |
@@ -181,6 +221,8 @@ ran all 10 epochs; the best checkpoint is the last one.
 | `tune_wide_clip` | 1.5e-4 | 10 | 2 | 85.6% (epoch 2) | 1.36 | 1.266 |
 | `tune_lr1.5e-4_seed1` | 1.5e-4 | 10 | 7 | 89.2% | 1.02 | 1.450 |
 | `tune_lr1.5e-4_seed2` | 1.5e-4 | 10 | 6 | 88.7% | 1.00 | 1.453 |
+
+</details>
 
 - **1e-3 is worse than 3e-4.** At every epoch it trails the baseline: by epoch 5 train loss is 0.72
   vs 0.55, validation accuracy 78.6% vs 88.3%, and validation swings again (81.6% → 78.6%). Early
@@ -254,6 +296,10 @@ Full report: [`reports/baseline_results_hr_full_20261031-090319.md`](reports/bas
 
 Validation (full val split) by epoch:
 
+<img src="reports/figures/table_08.png" alt="HR full run (all 6,251 train tiles, Colab T4): Epoch, Val accuracy, Val count MAE, Val score" width="473">
+
+<details><summary>Table as text</summary>
+
 | Epoch | Val accuracy | Val count MAE | Val score |
 |---|---|---|---|
 | 1 | 85.9% | 1.09 | 1.373 |
@@ -262,7 +308,13 @@ Validation (full val split) by epoch:
 | 8 | 90.7% | 0.87 | 1.521 |
 | 10 (best) | 90.7% | 0.87 | 1.522 |
 
+</details>
+
 Test results, complete test sets (2,226 + 1,056 tiles):
+
+<img src="reports/figures/table_09.png" alt="HR full run (all 6,251 train tiles, Colab T4): Metric, test, test_phili" width="496">
+
+<details><summary>Table as text</summary>
 
 | Metric | `test` | `test_phili` |
 |---|---|---|
@@ -272,6 +324,8 @@ Test results, complete test sets (2,226 + 1,056 tiles):
 | Accuracy (area) | 86.1% | 64.8% |
 | Count MAE (median baseline) | 0.91 (2.16) | 4.90 (5.25) |
 | Count RMSE (median baseline) | 2.34 (5.42) | 13.58 (14.10) |
+
+</details>
 
 - **Training was stable.** Validation improved almost every epoch; the best epoch is the last one, with
   train and validation loss still close (0.325 / 0.348), so no sign of over-fitting. Gradient norms
@@ -283,6 +337,10 @@ training data (1,500 vs 6,251 tiles, so also about 4× the gradient steps at the
 checkpoints' configs match otherwise, and both picked their last epoch as best. Both are evaluated on the
 complete test sets. One seed each.
 
+<img src="reports/figures/table_10.png" alt="HR full run (all 6,251 train tiles, Colab T4): Metric, test pilot, test full, test_phili pilot, test_phili full" width="657">
+
+<details><summary>Table as text</summary>
+
 | Metric | `test` pilot | `test` full | `test_phili` pilot | `test_phili` full |
 |---|---|---|---|---|
 | Accuracy (overall) | 88.5% | 90.2% | 77.6% | 76.9% |
@@ -291,6 +349,8 @@ complete test sets. One seed each.
 | Accuracy (area) | 84.4% | 86.1% | 67.5% | 64.8% |
 | Count MAE | 1.11 | 0.91 | 4.81 | 4.90 |
 | Count RMSE | 2.86 | 2.34 | 13.29 | 13.58 |
+
+</details>
 
 - **More data helped on the same region, not on the new city.** On `test`, the full run gains 1.8 points
   of accuracy and cuts count MAE by 0.20. On `test_phili` it gains nothing: accuracy is 0.8 points lower,
@@ -375,8 +435,7 @@ data/raw/rsvqa_lr/
 resumable, meant to be run on a box with real bandwidth — e.g. Colab). Then
 `python scripts/inspect_rsvqa.py data/raw/rsvqa_hr USGS_split` to inspect the
 actual file layout/answer vocabulary/question lengths and get a suggested
-config block — use it to replace the `VERIFY`-tagged placeholders in
-`configs/hr_config.yaml` before training on HR.
+config block, already applied in `configs/hr_config.yaml`.
 
 ## Usage
 
@@ -432,6 +491,10 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
+<img src="reports/figures/table_11.png" alt="Configuration: Key, Meaning" width="859">
+
+<details><summary>Table as text</summary>
+
 | Key | Meaning |
 |---|---|
 | `image_size`, `max_question_len`, `batch_size`, `num_workers` | Data pipeline |
@@ -452,6 +515,8 @@ All hyperparameters live in `configs/model_config.yaml` (LR) /
 | `selection_metric` | What `best.pt` and early stopping maximize: `score` = val accuracy + (1 − val count MAE / median-baseline MAE), or `val_loss` |
 | `experiments_dir`, `experiment_name` | Where runs are logged/checkpointed |
 
+</details>
+
 `question_vocab_size` is **not** a config key — it's a train-split artifact,
 computed at runtime from `<data_dir>/vocab/question_vocab.json` and passed
 into the model constructor explicitly (see `src/train.py:build_model`).
@@ -471,12 +536,14 @@ src/
 └── explain.py             # attention rollout + Grad-CAM (not started)
 scripts/
 ├── download_rsvqa_hr.py   # resumable HR download from Zenodo
-└── inspect_rsvqa.py       # dataset inspection (LR or HR), suggests config values
+├── inspect_rsvqa.py       # dataset inspection (LR or HR), suggests config values
+├── diagnose_run.py        # checks a run whose validation collapsed
+└── render_readme_tables.py  # README tables -> reports/figures/*.png
 tests/                     # one test module per src/ module, plus test_data_layout.py
                            # (HR code paths, tested against a tiny synthetic fake-HR dataset)
 configs/
 ├── model_config.yaml      # LR hyperparameters
-└── hr_config.yaml         # HR hyperparameters (some values VERIFY-tagged pending real data)
+└── hr_config.yaml         # HR hyperparameters
 notebooks/                 # exploration + the Colab runner (colab_hr_pilot.ipynb); no pipeline logic
 experiments/                # checkpoints + run logs (gitignored)
 reports/                   # data inspection notes, baseline results tables
