@@ -62,3 +62,13 @@ optimizer: adamw                       # only adamw is implemented; anything els
 early_stopping_patience: 3
 experiments_dir: experiments
 experiment_name: hr_pilot
+
+# --- zero-shot CLIP baseline (src/models/clip_baseline.py) ---
+clip_model_name: openai/clip-vit-large-patch14
+clip_batch_size: 64                    # tiles per encoding batch
+clip_text_batch_size: 512              # sentences per encoding batch
+# Chosen on val by selection_score; test only sees the winner.
+clip_prompt_templates:
+  - "{question} {answer}"
+  - "Question: {question} Answer: {answer}"
+  - "An aerial image. Question: {question} Answer: {answer}"

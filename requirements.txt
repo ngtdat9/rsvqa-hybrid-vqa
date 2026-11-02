@@ -11,3 +11,4 @@ matplotlib
 torch
 torchvision
 tqdm
+transformers>=4.40,<5  # src/models/clip_baseline.py

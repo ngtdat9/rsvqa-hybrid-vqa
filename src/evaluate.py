@@ -19,14 +19,18 @@ from src.models.vqa_head import compute_loss
 QUESTION_TYPES = ("comp", "rural_urban", "presence")
 
 
-def train_count_median(dataloader: DataLoader) -> float | None:
-    """Median count answer in a dataloader's records (no images are loaded)."""
-    records = getattr(dataloader.dataset, "qa_records", [])
+def count_median(records: list[dict]) -> float | None:
+    """Median count answer in QA records."""
     counts = sorted(float(r["answer"]) for r in records if r["type"] == "count")
     if not counts:
         return None
     mid = len(counts) // 2
     return counts[mid] if len(counts) % 2 else (counts[mid - 1] + counts[mid]) / 2
+
+
+def train_count_median(dataloader: DataLoader) -> float | None:
+    """Median count answer in a dataloader's records (no images are loaded)."""
+    return count_median(getattr(dataloader.dataset, "qa_records", []))
 
 
 def selection_score(metrics: dict[str, Any]) -> float:
