@@ -153,10 +153,11 @@ def test_select_template_picks_the_best_val_score():
     # only the second template's sentences point the tile at the right answer
     encoder = FakeEncoder({"B q no": [0.0, 1.0], "B q yes": [1.0, 0.0],
                            "A q no": [1.0, 0.0], "A q yes": [0.0, 1.0]})
-    best, scores = select_template([record(0, "q", "presence", "yes")], tiles, candidates,
+    best, metrics = select_template([record(0, "q", "presence", "yes")], tiles, candidates,
                                    ["A {question} {answer}", "B {question} {answer}"], encoder, TYPES)
     assert best == "B {question} {answer}"
-    assert scores == {"A {question} {answer}": 0.0, "B {question} {answer}": 1.0}
+    assert metrics["A {question} {answer}"]["class_accuracy"] == 0.0
+    assert metrics["B {question} {answer}"]["class_accuracy"] == 1.0
 
 
 def test_majority_accuracy_uses_train_answers_only():
@@ -197,7 +198,8 @@ def test_run_baseline_scores_val_with_every_template_and_test_with_the_winner_on
     report = run_baseline(clip_config(tmp_path), encoder)
 
     assert "## Split: test\n" in report and "## Split: test_phili\n" in report
-    assert "`B {question} {answer}` | 1.0000 (chosen)" in report
+    assert "| Template | Val score | Val accuracy | Val count MAE |" in report
+    assert "`B {question} {answer}` | 1.0000 (chosen) | 1.0000 |" in report
     assert "Accuracy, always the most common train answer (overall)" in report
     # 5 sentences per pass: A for val only, B for val and the 2 test splits
     assert sum(t.startswith("A ") for t in encoder.texts) == 5

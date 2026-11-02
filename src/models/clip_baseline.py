@@ -222,16 +222,17 @@ def select_template(
     val_records: list[dict], tiles: TileEmbeddings, candidates: dict[str, list[str]], templates: list[str],
     encoder: Encoder, question_types: list[str], baseline_count: float | None = None,
     text_batch_size: int = 512,
-) -> tuple[str, dict[str, float]]:
-    """The template with the best ``selection_score`` on val (the first one on a tie), and all scores."""
-    scores = {
-        template: selection_score(score_split(
+) -> tuple[str, dict[str, dict[str, Any]]]:
+    """The template with the best ``selection_score`` on val (the first one on a tie), and each
+    template's val metrics."""
+    metrics = {
+        template: score_split(
             val_records, tiles, candidates, template, encoder, question_types, baseline_count,
             text_batch_size, desc=f"val: {template}",
-        ))
+        )
         for template in templates
     }
-    return max(templates, key=lambda template: scores[template]), scores
+    return max(templates, key=lambda template: selection_score(metrics[template])), metrics
 
 
 def majority_accuracy(train_records: list[dict], records: list[dict]) -> dict[str, Any]:
@@ -287,7 +288,7 @@ def run_baseline(config: dict[str, Any], encoder: Encoder, pilot: bool = False) 
                             config["num_workers"], desc=f"encode {split} tiles")
 
     val_records = _load_records(config, "val", pilot)
-    template, scores = select_template(
+    template, val_metrics = select_template(
         val_records, encode(val_records, "val"), candidates, config["clip_prompt_templates"], encoder,
         config["question_types"], baseline_count, text_batch_size,
     )
@@ -295,8 +296,12 @@ def run_baseline(config: dict[str, Any], encoder: Encoder, pilot: bool = False) 
     title = f"# Results: zero-shot CLIP ({config['clip_model_name']})" + (" (pilot subsets)" if pilot else "")
     sections = [
         title + "\n",
-        "## Sentence template, chosen on val\n\n| Template | Val score |\n|---|---|\n"
-        + "".join(f"| `{t}` | {s:.4f}{' (chosen)' if t == template else ''} |\n" for t, s in scores.items()),
+        "## Sentence template, chosen on val\n\n| Template | Val score | Val accuracy | Val count MAE |\n|---|---|---|---|\n"
+        + "".join(
+            f"| `{t}` | {selection_score(m):.4f}{' (chosen)' if t == template else ''} "
+            f"| {m['class_accuracy']:.4f} | {m['count_mae']:.4f} |\n"
+            for t, m in val_metrics.items()
+        ),
     ]
     for split in [s for s in config["splits"] if s.startswith("test")]:
         started = time.monotonic()
