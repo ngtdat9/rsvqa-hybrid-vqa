@@ -15,7 +15,7 @@ follows.
 ## Status
 
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
-**Week 2 (RSVQA-HR port) groundwork is in place; the actual HR training run hasn't happened yet.**
+**Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
 | Module | Status |
 |---|---|
@@ -61,9 +61,7 @@ same model, optimizer, schedule, early-stopping and random state.
 Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. The Week 4 full
 run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
 
-**Next:** evaluate the pilot run `tune_lr1.5e-4_20261029-101754` on the complete test sets (`EVAL_RUN`
-in the notebook's step 6), so the pilot-vs-full comparison uses the same test tiles; then Week 5 (CLIP
-baseline, XAI).
+**Next:** Week 5 (CLIP baseline, XAI).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -279,14 +277,30 @@ Test results, complete test sets (2,226 + 1,056 tiles):
   train and validation loss still close (0.325 / 0.348), so no sign of over-fitting. Gradient norms
   stayed at ~3.5-4 on average (max 37), as in the pilot. 7-10 skipped steps per epoch out of ~19,500
   are the mixed-precision loss scaler's normal overflow checks.
-- **In-distribution test improved with the full data:** 90.2% accuracy and count MAE 0.91, against the
-  pilot's 88.5% and 1.14 (the pilot's numbers are on 300-tile test subsets, so the comparison is
-  approximate until the pilot is evaluated on the complete test sets).
-- **Philadelphia is much worse than the in-distribution test:** 76.9% vs 90.2%, and area questions only
-  64.8%. Count on Philadelphia barely beats always predicting the median (MAE 4.90 vs 5.25). The pilot
-  run scored 81.3% on a 300-tile Philadelphia subset; whether the full run is really worse there, or the
-  subset was easier, is open until the pilot is evaluated on the complete Philadelphia set. This is the
-  main generalization result for the Week 7 error analysis.
+
+**Pilot vs full, same test tiles.** `tune_lr1.5e-4_20261029-101754` differs from the full run only in
+training data (1,500 vs 6,251 tiles, so also about 4× the gradient steps at the same 10 epochs); the two
+checkpoints' configs match otherwise, and both picked their last epoch as best. Both are evaluated on the
+complete test sets. One seed each.
+
+| Metric | `test` pilot | `test` full | `test_phili` pilot | `test_phili` full |
+|---|---|---|---|---|
+| Accuracy (overall) | 88.5% | 90.2% | 77.6% | 76.9% |
+| Accuracy (presence) | 90.9% | 91.7% | 80.6% | 80.2% |
+| Accuracy (comp) | 88.4% | 90.9% | 79.8% | 79.6% |
+| Accuracy (area) | 84.4% | 86.1% | 67.5% | 64.8% |
+| Count MAE | 1.11 | 0.91 | 4.81 | 4.90 |
+| Count RMSE | 2.86 | 2.34 | 13.29 | 13.58 |
+
+- **More data helped on the same region, not on the new city.** On `test`, the full run gains 1.8 points
+  of accuracy and cuts count MAE by 0.20. On `test_phili` it gains nothing: accuracy is 0.8 points lower,
+  mostly from area questions (-2.7), and count is about the same. The spread of seeds was only measured
+  on validation, so the small Philadelphia decline should be read as "no improvement", not as proven harm.
+- **The Philadelphia gap is ~13 points** (90.2% vs 76.9%), and count there barely beats always predicting
+  the median (MAE 4.90 vs 5.25). This is the main generalization result for the Week 7 error analysis.
+- **Do not compare with the 81.3% from the HR pilot results above.** That is Run 3: a 300-tile subset at
+  a different learning rate. Most of its 3.7-point lead over this pilot's 77.6% can't be separated between
+  the two, as Run 3 was not evaluated on the complete set.
 
 ## Key design decisions
 
