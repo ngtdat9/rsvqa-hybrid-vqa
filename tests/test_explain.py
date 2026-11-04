@@ -14,6 +14,7 @@ from src.explain import (
     question_pairs,
     question_pool,
     question_rollout_map,
+    random_block_map,
     randomized_copy,
     rank_scores,
     rollout_matrix,
@@ -182,6 +183,24 @@ def test_a_tiny_map_keeps_its_ranking():
     assert scores.argsort(descending=True).tolist() == [[1, 2, 0, 3]]
 
 
+def test_random_block_deletes_one_connected_patch_of_the_right_size():
+    generator = torch.Generator().manual_seed(0)
+    block = random_block_map(torch.Size((50, 64)), generator)
+    assert block.argmax(dim=1).unique().numel() > 10  # centres vary
+    scores = rank_scores(block, generator)
+    for row in scores:
+        deleted = delete_top_patches(torch.ones(1, 3, 8, 8), row[None], 0.2)[0, 0] == 0
+        assert int(deleted.sum()) == round(0.2 * 64)
+        cells = {tuple(cell) for cell in deleted.nonzero().tolist()}
+        seen, stack = set(), [next(iter(cells))]
+        while stack:
+            r, c = stack.pop()
+            if (r, c) in cells and (r, c) not in seen:
+                seen.add((r, c))
+                stack += [(r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)]
+        assert seen == cells
+
+
 def test_deletion_effect_uses_the_right_measure_per_row():
     base = torch.log(torch.tensor([[0.8, 0.2], [0.5, 0.5]]))
     after = torch.log(torch.tensor([[0.3, 0.7], [0.5, 0.5]]))
@@ -327,8 +346,9 @@ def test_run_xai_writes_the_report_and_figures(trained_run, tmp_path: Path):
     report = run_xai(run_dir, config)
     assert "**Map for the RAG layer:" in report
     assert "## Deletion test: test\n" in report and "## Deletion test: test_phili\n" in report
-    for method in ("cross_attention", "rollout", "grad_cam", "random"):
+    for method in ("cross_attention", "rollout", "grad_cam", "random", "random_block"):
         assert f"| {method} |" in report
+    assert "## Against a random block (secondary" in report
     assert "## Against the random map" in report and "s for one answer and its maps" in report
     figures = list((tmp_path / "figures" / "run").glob("*.png"))
     assert figures and all(path.stat().st_size > 0 for path in figures)

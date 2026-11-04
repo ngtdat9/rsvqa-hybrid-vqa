@@ -40,6 +40,7 @@ from src.evaluate import load_run
 
 METHODS = ("cross_attention", "rollout", "grad_cam")
 CONTROL = "random"
+BLOCK_CONTROL = "random_block"  # secondary: reported, but has no say in choose_map
 _TIE_BREAK = 1e-5  # far below any real score difference on a map scaled to max 1
 
 
@@ -138,6 +139,18 @@ def rank_scores(maps: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
     scale = torch.where(scale > 0, scale, torch.ones_like(scale))  # scale, not clamp: softplus makes count maps tiny
     noise = torch.rand(maps.shape, generator=generator).to(maps.device)
     return maps / scale + _TIE_BREAK * noise
+
+
+def random_block_map(shape: torch.Size, generator: torch.Generator) -> torch.Tensor:
+    """A [B,N] map whose top patches form one compact patch around a random centre, at any
+    deletion size. Scattered random cells can disturb more of the image than clustered ones,
+    since each token sees beyond its own cell; this control measures clustered deletion."""
+    batch_size, num_patches = shape
+    grid = round(math.sqrt(num_patches))
+    rows, cols = torch.meshgrid(torch.arange(grid), torch.arange(grid), indexing="ij")
+    centres = torch.randint(0, grid, (batch_size, 2), generator=generator)
+    squared = (rows.flatten() - centres[:, :1]) ** 2 + (cols.flatten() - centres[:, 1:]) ** 2
+    return 1 / (1 + squared.float().sqrt())
 
 
 def delete_top_patches(image: torch.Tensor, scores: torch.Tensor, fraction: float) -> torch.Tensor:
@@ -357,6 +370,7 @@ def score_split(
         correct = _is_correct(explanation.class_logits, explanation.count_pred, batch)
         maps = dict(explanation.maps)
         maps[CONTROL] = torch.rand(maps["rollout"].shape, generator=generator).to(device)
+        maps[BLOCK_CONTROL] = random_block_map(maps["rollout"].shape, generator).to(device)
 
         for method in METHODS:
             result.flat_maps[method] += int((maps[method].amax(1) == maps[method].amin(1)).sum())
@@ -468,7 +482,7 @@ def _split_table(split: str, result: SplitResult, fractions: list[float], types:
         if not rows:
             continue
         num_right = sum(result.correct[i] for i in rows)
-        for method in (*METHODS, CONTROL):
+        for method in (*METHODS, CONTROL, BLOCK_CONTROL):
             effects = torch.cat(result.effects[method])[rows]
             changed = torch.cat(result.changed[method])[rows].float()
             cells = " | ".join(f"{value:.4f}" for value in effects.mean(0).tolist())
@@ -479,8 +493,21 @@ def _split_table(split: str, result: SplitResult, fractions: list[float], types:
     return "\n".join(lines) + "\n"
 
 
-def compare_with_random(results: dict[str, SplitResult], types: list[str]) -> dict[str, dict[str, dict[str, float]]]:
-    """Per map and type, pooled over test splits: each question's effect minus the random map's."""
+def _comparison_table(title: str, intro: str, comparison: dict[str, dict[str, dict[str, float]]]) -> str:
+    return (
+        f"## {title}\n\n{intro}\n\n"
+        "| Map | Type | Mean difference | 95% lower bound | Standardized |\n|---|---|---|---|---|\n"
+        + "".join(
+            f"| {method} | {qtype} | {row['mean']:.4f} | {row['lower']:.4f} | {row['standardized']:.3f} |\n"
+            for method, by_type in comparison.items() for qtype, row in by_type.items()
+        )
+    )
+
+
+def compare_with_control(
+    results: dict[str, SplitResult], types: list[str], control: str,
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Per map and type, pooled over test splits: each question's effect minus the control's."""
     comparison: dict[str, dict[str, dict[str, float]]] = {}
     for method in METHODS:
         comparison[method] = {}
@@ -489,7 +516,7 @@ def compare_with_random(results: dict[str, SplitResult], types: list[str]) -> di
             for result in results.values():
                 rows = [i for i, t in enumerate(result.types) if t == qtype]
                 if rows:
-                    per_question = torch.cat(result.effects[method])[rows] - torch.cat(result.effects[CONTROL])[rows]
+                    per_question = torch.cat(result.effects[method])[rows] - torch.cat(result.effects[control])[rows]
                     differences.append(per_question.mean(dim=1))
             if differences:
                 comparison[method][qtype] = paired_summary(torch.cat(differences))
@@ -537,7 +564,8 @@ def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
 
     sanity_means = {m: _nan_mean(torch.cat(sanity[m])) for m in METHODS}
     question_means = {m: _nan_mean(torch.cat(question[m])) for m in METHODS}
-    comparison = compare_with_random(results, types)
+    comparison = compare_with_control(results, types, CONTROL)
+    block_comparison = compare_with_control(results, types, BLOCK_CONTROL)
     sanity_limit, question_limit = config["xai_sanity_max_correlation"], config["xai_question_max_correlation"]
     chosen, reasons = choose_map(comparison, sanity_means, question_means, sanity_limit, question_limit)
 
@@ -546,15 +574,16 @@ def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
         f"**Map for the RAG layer: {chosen or 'none qualifies; the maps must not be presented as evidence'}**\n\n"
         + "".join(f"- `{method}`: {reasons[method]}\n" for method in METHODS)
     )
-    sections.append(
-        "## Against the random map (test splits pooled)\n\n"
-        "Per question, the effect averaged over deletion sizes, minus the random map's.\n\n"
-        "| Map | Type | Mean difference | 95% lower bound | Standardized |\n|---|---|---|---|---|\n"
-        + "".join(
-            f"| {method} | {qtype} | {row['mean']:.4f} | {row['lower']:.4f} | {row['standardized']:.3f} |\n"
-            for method, by_type in comparison.items() for qtype, row in by_type.items()
-        )
-    )
+    sections.append(_comparison_table(
+        "Against the random map (test splits pooled)",
+        "Per question, the effect averaged over deletion sizes, minus the random map's.", comparison,
+    ))
+    sections.append(_comparison_table(
+        "Against a random block (secondary, test splits pooled)",
+        "The same, against one compact random patch of the same size. Added after the pilot, so it "
+        "does not affect the choice of map; it shows whether scattered deletion made the random map a harsher baseline.",
+        block_comparison,
+    ))
     sections.append(
         "## Checks\n\nMean rank correlation; a map fails at or above the limit.\n\n"
         f"| Map | Trained vs random weights (limit {sanity_limit}) | Two questions, same tile (limit {question_limit}) "
