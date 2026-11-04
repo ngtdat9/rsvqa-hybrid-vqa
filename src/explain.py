@@ -697,15 +697,24 @@ def run_xai(
         + "".join(f"- `{method}`: {reasons[method]}\n" for method in methods)
     )
     sections.append(_comparison_table(
-        "Against the random map (test splits pooled)",
+        "Against the random map (scored splits pooled; this decides the choice)",
         "Per question, the effect averaged over deletion sizes, minus the random map's.", comparison,
     ))
     sections.append(_comparison_table(
-        "Against a random block (secondary, test splits pooled)",
+        "Against a random block (secondary, scored splits pooled)",
         "The same, against one compact random patch of the same size. Added after the pilot, so it "
         "does not affect the choice of map; it shows whether scattered deletion made the random map a harsher baseline.",
         block_comparison,
     ))
+    if len(results) > 1:  # pooling can hide a map that only works on one test set
+        sections += [
+            _comparison_table(
+                f"Against the random map: {split} alone (does not decide the choice)",
+                "The same as the pooled table, for this split only.",
+                compare_with_control({split: result}, types, CONTROL, methods),
+            )
+            for split, result in results.items()
+        ]
     sections.append(
         "## Checks\n\nMean rank correlation; a map fails at or above the limit.\n\n"
         f"| Map | Trained vs random weights (limit {sanity_limit}) | Two questions, same tile (limit {question_limit}) "

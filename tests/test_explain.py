@@ -430,6 +430,7 @@ def test_run_xai_writes_the_report_and_figures(trained_run, tmp_path: Path):
     for method in ("cross_attention", "rollout", "grad_cam", "random", "random_block"):
         assert f"| {method} |" in report
     assert "## Against a random block (secondary" in report
+    assert "## Against the random map: test alone" in report and "## Against the random map: test_phili alone" in report
     assert "## Against the random map" in report and "s for one answer and its maps" in report
     figures = list((tmp_path / "figures" / "run").glob("*.png"))
     assert figures and all(path.stat().st_size > 0 for path in figures)
@@ -452,4 +453,5 @@ def test_new_methods_run_on_val_with_blurred_deletion(trained_run, tmp_path: Pat
     assert "## Deletion test: val\n" in report and "## Deletion test: test" not in report
     assert "| gradient_attention |" in report and "| occlusion |" in report
     assert "| rollout |" not in report
+    assert "alone (does not decide" not in report  # only one split
     assert list((tmp_path / "figures" / "run_new_val").glob("*.png"))
