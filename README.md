@@ -509,6 +509,24 @@ the 95% lower bound on the difference:
   deletions. The all-constant check found 3 maps of 3,829. The sample limits above still apply. Each answer takes
   1.48 s with its maps on a T4, against 0.009 s for the first three maps.
 
+**The maps are hard to read as explanations.** In all 16 test figures (one per question type, test set, and right
+or wrong answer), the strongest cells are mostly scattered and do not trace the object asked about. This is a visual
+impression from a small sample, not a measurement. They should be read as "changing these cells changed the answer
+most", not as "the model looked at this object".
+
+**Unresolved: no-data strips.** On 2 of the 3 tiles in those figures with a black no-data strip, both Philadelphia
+count questions, the strongest cells sit in or beside the strip. Replacing black with grey is a large edit, so this
+may be an artifact of the map, and the strips may have contributed to the deletion results. Neither has been measured.
+
+Examples, the presence figures for both test sets, right and wrong (tiles chosen by a fixed rule, not by appearance),
+then one Philadelphia count figure, added by hand because it shows the strip:
+
+<img src="reports/figures/xai/occlusion_test_presence_right.png" alt="Occlusion map, test set, presence question answered correctly" width="825">
+<img src="reports/figures/xai/occlusion_test_presence_wrong.png" alt="Occlusion map, test set, presence question answered wrongly" width="825">
+<img src="reports/figures/xai/occlusion_test_phili_presence_right.png" alt="Occlusion map, Philadelphia, presence question answered correctly" width="825">
+<img src="reports/figures/xai/occlusion_test_phili_presence_wrong.png" alt="Occlusion map, Philadelphia, presence question answered wrongly" width="825">
+<img src="reports/figures/xai/occlusion_test_phili_count_wrong.png" alt="Occlusion map, Philadelphia, count question answered wrongly, strongest cells beside a black no-data strip" width="825">
+
 ## Key design decisions
 
 - **Count questions are a regression target**, not a classification bucket.
