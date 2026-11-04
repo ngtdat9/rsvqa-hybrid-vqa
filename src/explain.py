@@ -8,14 +8,20 @@ Three maps over the patch grid, each [B,N] with N = 16x16 tokens for HR:
   * ``grad_cam``: gradient-weighted activations of the last CNN stage, for the predicted
     class (classification rows) or the predicted count (count rows).
 
+Two further maps, added after those three failed, are selected on val and confirmed on test:
+  * ``gradient_attention``: every attention step weighted by its gradient for this answer
+    (Chefer et al., 2021), so that the path depends on the question.
+  * ``occlusion``: blank each grid cell in turn and measure how much the answer changes.
+
     python -m src.explain <run_dir> configs/hr_config.yaml [--pilot]
+    python -m src.explain <run_dir> configs/hr_config.yaml --new-methods occlusion,gradient_attention --stage val
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import math
 import random
-import sys
 import textwrap
 import time
 from collections import defaultdict
@@ -29,6 +35,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 import yaml
 from torch import nn
 from torch.nn.init import trunc_normal_
@@ -39,6 +46,7 @@ from src.data_pipeline import prepare_batch, vqa_collate_fn
 from src.evaluate import load_run
 
 METHODS = ("cross_attention", "rollout", "grad_cam")
+NEW_METHODS = ("gradient_attention", "occlusion")
 CONTROL = "random"
 BLOCK_CONTROL = "random_block"  # secondary: reported, but has no say in choose_map
 _TIE_BREAK = 1e-5  # far below any real score difference on a map scaled to max 1
@@ -81,6 +89,12 @@ def question_rollout_map(word_map: torch.Tensor, layer_attention: list[torch.Ten
     return (word_map.unsqueeze(1) @ patches).squeeze(1)
 
 
+def _target_scores(outputs: dict[str, torch.Tensor], is_count: torch.Tensor) -> torch.Tensor:
+    """What a map explains: the predicted class's logit, or the predicted count."""
+    predicted = outputs["class_logits"].argmax(dim=-1, keepdim=True)
+    return torch.where(is_count, outputs["count_pred"], outputs["class_logits"].gather(1, predicted).squeeze(1))
+
+
 def explain_batch(model: nn.Module, batch: dict[str, Any]) -> Explanation:
     """All three maps from one forward and one backward pass, in float32.
 
@@ -104,10 +118,8 @@ def explain_batch(model: nn.Module, batch: dict[str, Any]) -> Explanation:
         with torch.enable_grad():
             outputs = model(batch, return_attention=True)
             is_count = ~batch["count_target"].isnan()
-            predicted = outputs["class_logits"].argmax(dim=-1, keepdim=True)
-            scores = torch.where(is_count, outputs["count_pred"], outputs["class_logits"].gather(1, predicted).squeeze(1))
             activations = stage_output[0]
-            gradients = torch.autograd.grad(scores.sum(), activations)[0]
+            gradients = torch.autograd.grad(_target_scores(outputs, is_count).sum(), activations)[0]
     finally:
         for hook in hooks:
             hook.remove()
@@ -132,6 +144,90 @@ def explain_batch(model: nn.Module, batch: dict[str, Any]) -> Explanation:
     )
 
 
+def _attention_with_weights(
+    attention: nn.MultiheadAttention, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """MultiheadAttention's computation in eval mode (batch first). Its own returned weights
+    are a copy taken after the output, so no gradient reaches them; these [B,H,L,N] do feed it."""
+    batch_size, length, dim = query.shape
+    head_dim = attention.head_dim
+
+    def project(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        return F.linear(x, weight, bias).view(x.size(0), x.size(1), attention.num_heads, head_dim).transpose(1, 2)
+
+    weights_q, weights_k, weights_v = attention.in_proj_weight.chunk(3)
+    bias_q, bias_k, bias_v = attention.in_proj_bias.chunk(3)
+    q = project(query, weights_q, bias_q)
+    k = project(key, weights_k, bias_k)
+    v = project(value, weights_v, bias_v)
+    weights = (q @ k.transpose(-2, -1) / math.sqrt(head_dim)).softmax(dim=-1)
+    return attention.out_proj((weights @ v).transpose(1, 2).reshape(batch_size, length, dim)), weights
+
+
+def gradient_attention_map(model: nn.Module, batch: dict[str, Any]) -> torch.Tensor:
+    """Chefer et al.'s relevance through the encoder and the fusion: at each attention step keep
+    the positive part of gradient x attention, averaged over heads. [B,N] over input patches."""
+    modules = [layer.self_attn for layer in model.encoder.transformer.layers] + [model.fusion.attn]
+    captured: dict[nn.Module, torch.Tensor] = {}
+
+    def patched(module: nn.Module) -> Any:
+        def forward(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, **_: Any) -> tuple[torch.Tensor, None]:
+            output, captured[module] = _attention_with_weights(module, query, key, value)
+            return output, None
+        return forward
+
+    for module in modules:
+        module.forward = patched(module)
+    try:
+        with torch.enable_grad():
+            outputs = model(batch)
+            scores = _target_scores(outputs, ~batch["count_target"].isnan())
+            gradients = torch.autograd.grad(scores.sum(), [captured[m] for m in modules])
+    finally:
+        for module in modules:
+            del module.forward
+
+    with torch.no_grad():
+        steps = [
+            ((gradient * captured[module]).clamp(min=0)).mean(dim=1)
+            for module, gradient in zip(modules, gradients)
+        ]
+        size = steps[0].size(-1)
+        relevance = torch.eye(size, device=steps[0].device, dtype=steps[0].dtype).expand(steps[0].size(0), -1, -1)
+        for step in steps[:-1]:
+            relevance = relevance + step @ relevance
+        word_map = word_attention_map(steps[-1], batch["question_len"])
+        return (word_map.unsqueeze(1) @ relevance[:, 1:, 1:]).squeeze(1)
+
+
+@torch.no_grad()
+def occlusion_map(
+    model: nn.Module, batch: dict[str, Any], base_logits: torch.Tensor, base_count: torch.Tensor, num_patches: int,
+) -> torch.Tensor:
+    """Per cell, the change in the answer when that cell alone is blanked to the train mean. [B,N]."""
+    is_count = ~batch["count_target"].isnan()
+    cells = []
+    for cell in range(num_patches):
+        scores = torch.zeros(base_count.size(0), num_patches, device=base_count.device)
+        scores[:, cell] = 1.0
+        outputs = model({**batch, "image": delete_top_patches(batch["image"], scores, 1 / num_patches)})
+        cells.append(deletion_effect(base_logits, base_count, outputs["class_logits"], outputs["count_pred"], is_count)[0])
+    return torch.stack(cells, dim=1)
+
+
+def explain_methods(model: nn.Module, batch: dict[str, Any], methods: tuple[str, ...]) -> Explanation:
+    """``explain_batch``, keeping only ``methods`` and adding any of the slower maps asked for."""
+    explanation = explain_batch(model, batch)
+    maps = {method: explanation.maps[method] for method in methods if method in explanation.maps}
+    if "gradient_attention" in methods:
+        maps["gradient_attention"] = gradient_attention_map(model, batch)
+    if "occlusion" in methods:
+        num_patches = explanation.maps["rollout"].size(1)
+        maps["occlusion"] = occlusion_map(model, batch, explanation.class_logits, explanation.count_pred, num_patches)
+    explanation.maps = maps
+    return explanation
+
+
 def rank_scores(maps: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
     """Scores for ranking patches, scaled to max 1. Ties break at random, or an all-zero
     Grad-CAM would always delete the top-left corner."""
@@ -153,16 +249,27 @@ def random_block_map(shape: torch.Size, generator: torch.Generator) -> torch.Ten
     return 1 / (1 + squared.float().sqrt())
 
 
-def delete_top_patches(image: torch.Tensor, scores: torch.Tensor, fraction: float) -> torch.Tensor:
-    """Blank the top ``fraction`` of grid cells. Images are normalized by the train-split
-    mean and std, so zero is the train mean colour and no new statistic is needed."""
+def blur_image(image: torch.Tensor, sigma: float) -> torch.Tensor:
+    """Heavy Gaussian blur, a second way to remove detail: occlusion builds its map by blanking
+    to the mean, so testing it the same way would favour it by construction."""
+    radius = math.ceil(2 * sigma)
+    return TF.gaussian_blur(image, kernel_size=[2 * radius + 1] * 2, sigma=[sigma, sigma])
+
+
+def delete_top_patches(
+    image: torch.Tensor, scores: torch.Tensor, fraction: float, fill: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Replace the top ``fraction`` of grid cells with ``fill``. By default that is zero: images
+    are normalized by the train-split mean and std, so zero is the train mean colour and no new
+    statistic is needed."""
     num_patches = scores.size(1)
     grid = round(math.sqrt(num_patches))
     if grid * grid != num_patches:
         raise ValueError(f"{num_patches} patches do not form a square grid")
     top = scores.topk(max(1, round(fraction * num_patches)), dim=1).indices
     mask = torch.zeros_like(scores).scatter(1, top, 1.0).view(-1, 1, grid, grid)
-    return image * (1 - F.interpolate(mask, size=image.shape[-2:], mode="nearest"))
+    mask = F.interpolate(mask, size=image.shape[-2:], mode="nearest")
+    return image * (1 - mask) if fill is None else image * (1 - mask) + fill * mask
 
 
 def deletion_effect(
@@ -354,7 +461,7 @@ def predict_correct(
 
 def score_split(
     model: nn.Module, dataset: Any, indices: list[int], config: dict[str, Any], device: torch.device,
-    generator: torch.Generator, split: str, figure_dir: Path,
+    generator: torch.Generator, split: str, figure_dir: Path, methods: tuple[str, ...] = METHODS,
 ) -> SplitResult:
     """Deletion test, agreement between maps, and one right and one wrong figure per type.
     The figures are the first of each kind in the random sample, whatever their maps show."""
@@ -365,17 +472,19 @@ def score_split(
     position = 0
     for batch in tqdm(_loader(dataset, indices, config), desc=f"explain {split}", leave=False, unit="batch"):
         batch = prepare_batch(batch, device, dataset)
-        explanation = explain_batch(model, batch)
+        explanation = explain_methods(model, batch, methods)
+        fill = blur_image(batch["image"], config["xai_blur_sigma"]) if config["xai_deletion_fill"] == "blur" else None
         is_count = ~batch["count_target"].isnan()
         correct = _is_correct(explanation.class_logits, explanation.count_pred, batch)
         maps = dict(explanation.maps)
-        maps[CONTROL] = torch.rand(maps["rollout"].shape, generator=generator).to(device)
-        maps[BLOCK_CONTROL] = random_block_map(maps["rollout"].shape, generator).to(device)
+        shape = maps[methods[0]].shape
+        maps[CONTROL] = torch.rand(shape, generator=generator).to(device)
+        maps[BLOCK_CONTROL] = random_block_map(shape, generator).to(device)
 
-        for method in METHODS:
+        for method in methods:
             result.flat_maps[method] += int((maps[method].amax(1) == maps[method].amin(1)).sum())
-        for i, a in enumerate(METHODS):
-            for b in METHODS[i + 1:]:
+        for i, a in enumerate(methods):
+            for b in methods[i + 1:]:
                 result.agreement[(a, b)].append(spearman(maps[a], maps[b]))
                 result.overlap[(a, b)].append(top_overlap(maps[a], maps[b], config["xai_top_overlap_fraction"]).cpu())
 
@@ -383,7 +492,7 @@ def score_split(
             scores = rank_scores(values, generator)
             effects, changed = [], []
             for fraction in fractions:
-                deleted = {**batch, "image": delete_top_patches(batch["image"], scores, fraction)}
+                deleted = {**batch, "image": delete_top_patches(batch["image"], scores, fraction, fill)}
                 with torch.no_grad():
                     outputs = model(deleted)
                 effect, flip = deletion_effect(
@@ -408,7 +517,7 @@ def score_split(
                     dataset.answer_vocab.idx_to_class,
                 )
                 save_example_figure(
-                    batch["image"][row] * std + mean, {m: explanation.maps[m][row] for m in METHODS},
+                    batch["image"][row] * std + mean, {m: explanation.maps[m][row] for m in methods},
                     record["question"], record["answer"], predicted, path,
                 )
                 result.figures.append(path)
@@ -420,44 +529,48 @@ def score_split(
 
 def sanity_check(
     model: nn.Module, dataset: Any, indices: list[int], config: dict[str, Any], device: torch.device,
+    methods: tuple[str, ...] = METHODS,
 ) -> dict[str, torch.Tensor]:
     """Rank correlation between each map from the trained model and from random weights."""
     random_model = randomized_copy(model)
     correlations: dict[str, list[torch.Tensor]] = defaultdict(list)
     for batch in tqdm(_loader(dataset, indices, config), desc="randomized weights", leave=False, unit="batch"):
         batch = prepare_batch(batch, device, dataset)
-        trained, randomized = explain_batch(model, batch), explain_batch(random_model, batch)
-        for method in METHODS:
+        trained = explain_methods(model, batch, methods)
+        randomized = explain_methods(random_model, batch, methods)
+        for method in methods:
             correlations[method].append(spearman(trained.maps[method], randomized.maps[method]))
     return {method: torch.cat(values) for method, values in correlations.items()}
 
 
 def question_check(
     model: nn.Module, dataset: Any, pairs: list[tuple[int, int]], config: dict[str, Any], device: torch.device,
+    methods: tuple[str, ...] = METHODS,
 ) -> dict[str, torch.Tensor]:
     """Rank correlation between the maps of two different questions on the same tile."""
     correlations: dict[str, list[torch.Tensor]] = defaultdict(list)
     first = _loader(dataset, [a for a, _ in pairs], config)
     second = _loader(dataset, [b for _, b in pairs], config)
     for batch_a, batch_b in tqdm(zip(first, second), total=len(first), desc="question pairs", leave=False, unit="batch"):
-        maps_a = explain_batch(model, prepare_batch(batch_a, device, dataset)).maps
-        maps_b = explain_batch(model, prepare_batch(batch_b, device, dataset)).maps
-        for method in METHODS:
+        maps_a = explain_methods(model, prepare_batch(batch_a, device, dataset), methods).maps
+        maps_b = explain_methods(model, prepare_batch(batch_b, device, dataset), methods).maps
+        for method in methods:
             correlations[method].append(spearman(maps_a[method], maps_b[method]))
     return {method: torch.cat(values) for method, values in correlations.items()}
 
 
 def measure_latency(
     model: nn.Module, dataset: Any, index: int, config: dict[str, Any], device: torch.device, runs: int,
+    methods: tuple[str, ...] = METHODS,
 ) -> float:
     """Seconds for one answer and its maps, for one question: what a demo would wait for."""
     batch = prepare_batch(next(iter(_loader(dataset, [index], config))), device, dataset)
-    explain_batch(model, batch)  # the first call also pays for warm-up
+    explain_methods(model, batch, methods)  # the first call also pays for warm-up
     if device.type == "cuda":
         torch.cuda.synchronize()
     started = time.monotonic()
     for _ in range(runs):
-        explain_batch(model, batch)
+        explain_methods(model, batch, methods)
     if device.type == "cuda":
         torch.cuda.synchronize()
     return (time.monotonic() - started) / runs
@@ -467,7 +580,9 @@ def _nan_mean(values: torch.Tensor) -> float:
     return values.nanmean().item()
 
 
-def _split_table(split: str, result: SplitResult, fractions: list[float], types: list[str]) -> str:
+def _split_table(
+    split: str, result: SplitResult, fractions: list[float], types: list[str], methods: tuple[str, ...],
+) -> str:
     type_of = result.types
     header = " | ".join(f"{fraction:.0%}" for fraction in fractions)
     lines = [
@@ -482,7 +597,7 @@ def _split_table(split: str, result: SplitResult, fractions: list[float], types:
         if not rows:
             continue
         num_right = sum(result.correct[i] for i in rows)
-        for method in (*METHODS, CONTROL, BLOCK_CONTROL):
+        for method in (*methods, CONTROL, BLOCK_CONTROL):
             effects = torch.cat(result.effects[method])[rows]
             changed = torch.cat(result.changed[method])[rows].float()
             cells = " | ".join(f"{value:.4f}" for value in effects.mean(0).tolist())
@@ -505,11 +620,11 @@ def _comparison_table(title: str, intro: str, comparison: dict[str, dict[str, di
 
 
 def compare_with_control(
-    results: dict[str, SplitResult], types: list[str], control: str,
+    results: dict[str, SplitResult], types: list[str], control: str, methods: tuple[str, ...] = METHODS,
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Per map and type, pooled over test splits: each question's effect minus the control's."""
     comparison: dict[str, dict[str, dict[str, float]]] = {}
-    for method in METHODS:
+    for method in methods:
         comparison[method] = {}
         for qtype in types:
             differences = []
@@ -523,8 +638,12 @@ def compare_with_control(
     return comparison
 
 
-def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
-    """Returns the markdown report; figures go to ``xai_figure_dir``."""
+def run_xai(
+    run_dir: Path, config: dict[str, Any], pilot: bool = False, methods: tuple[str, ...] = METHODS,
+    stage: str = "test", tag: str = "",
+) -> str:
+    """Returns the markdown report; figures go to ``xai_figure_dir``. ``stage`` is ``val`` or
+    ``test``: the later maps are selected on val before test sees them."""
     config = dict(config)
     config["cache_images"] = False  # a sample of tiles: decoding them beats caching 8 GB
     if not pilot:
@@ -533,11 +652,11 @@ def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
     seed = config["xai_seed"]
     torch.manual_seed(seed)
     generator = torch.Generator().manual_seed(seed)
-    figure_dir = Path(config["xai_figure_dir"]) / ("pilot" if pilot else run_dir.name)
+    figure_dir = Path(config["xai_figure_dir"]) / (("pilot" if pilot else run_dir.name) + tag)
 
     model, dataloaders, device = load_run(run_dir, config)
     model.eval()
-    splits = [s for s in config["splits"] if s.startswith("test")]
+    splits = ["val"] if stage == "val" else [s for s in config["splits"] if s.startswith("test")]
     types = [*config["question_types"], "count"]
     fractions = config["xai_delete_fractions"]
 
@@ -552,27 +671,30 @@ def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
         correct = predict_correct(model, dataset, pool, config, device, f"predict {split}")
         sample = balanced_sample(pool, records, correct, per_group)
         if latency is None:
-            latency = measure_latency(model, dataset, sample[0], config, device, config["xai_latency_runs"])
-        results[split] = score_split(model, dataset, sample, config, device, generator, split, figure_dir)
+            latency = measure_latency(model, dataset, sample[0], config, device, config["xai_latency_runs"], methods)
+        results[split] = score_split(model, dataset, sample, config, device, generator, split, figure_dir, methods)
 
         check_size = config["xai_pilot_check_tiles" if pilot else "xai_check_tiles"]
-        for method, values in sanity_check(model, dataset, sample[:check_size], config, device).items():
+        for method, values in sanity_check(model, dataset, sample[:check_size], config, device, methods).items():
             sanity[method].append(values)
         pairs = question_pairs(records, seed, check_size)
-        for method, values in question_check(model, dataset, pairs, config, device).items():
+        for method, values in question_check(model, dataset, pairs, config, device, methods).items():
             question[method].append(values)
 
-    sanity_means = {m: _nan_mean(torch.cat(sanity[m])) for m in METHODS}
-    question_means = {m: _nan_mean(torch.cat(question[m])) for m in METHODS}
-    comparison = compare_with_control(results, types, CONTROL)
-    block_comparison = compare_with_control(results, types, BLOCK_CONTROL)
+    sanity_means = {m: _nan_mean(torch.cat(sanity[m])) for m in methods}
+    question_means = {m: _nan_mean(torch.cat(question[m])) for m in methods}
+    comparison = compare_with_control(results, types, CONTROL, methods)
+    block_comparison = compare_with_control(results, types, BLOCK_CONTROL, methods)
     sanity_limit, question_limit = config["xai_sanity_max_correlation"], config["xai_question_max_correlation"]
     chosen, reasons = choose_map(comparison, sanity_means, question_means, sanity_limit, question_limit)
 
-    sections = [f"# XAI results: {run_dir.name}" + (" (pilot subsets)" if pilot else "") + "\n"]
+    sections = [
+        f"# XAI results: {run_dir.name}" + (" (pilot subsets)" if pilot else "") + "\n\n"
+        f"Splits: {', '.join(splits)}. Deleted cells are replaced with: {config['xai_deletion_fill']}.\n"
+    ]
     sections.append(
         f"**Map for the RAG layer: {chosen or 'none qualifies; the maps must not be presented as evidence'}**\n\n"
-        + "".join(f"- `{method}`: {reasons[method]}\n" for method in METHODS)
+        + "".join(f"- `{method}`: {reasons[method]}\n" for method in methods)
     )
     sections.append(_comparison_table(
         "Against the random map (test splits pooled)",
@@ -591,7 +713,7 @@ def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
         + "".join(
             f"| {m} | {sanity_means[m]:.3f} | {question_means[m]:.3f} "
             f"| {sum(r.flat_maps[m] for r in results.values())} of {sum(len(r.types) for r in results.values())} |\n"
-            for m in METHODS
+            for m in methods
         )
     )
     agreement_rows = []
@@ -599,24 +721,39 @@ def run_xai(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
         correlation = _nan_mean(torch.cat([v for r in results.values() for v in r.agreement[(a, b)]]))
         overlap = torch.cat([v for r in results.values() for v in r.overlap[(a, b)]]).mean().item()
         agreement_rows.append(f"| {a} vs {b} | {correlation:.3f} | {overlap:.3f} |\n")
-    sections.append(
-        "## Agreement between maps\n\n"
-        f"| Pair | Rank correlation | Overlap of top {config['xai_top_overlap_fraction']:.0%} (IoU) |\n|---|---|---|\n"
-        + "".join(agreement_rows)
-    )
-    sections += [_split_table(split, results[split], fractions, types) for split in splits]
+    if agreement_rows:
+        sections.append(
+            "## Agreement between maps\n\n"
+            f"| Pair | Rank correlation | Overlap of top {config['xai_top_overlap_fraction']:.0%} (IoU) |\n|---|---|---|\n"
+            + "".join(agreement_rows)
+        )
+    sections += [_split_table(split, results[split], fractions, types, methods) for split in splits]
     sections.append(f"## Speed\n\n{latency:.3f} s for one answer and its maps, on {device.type}.\n")
     return "\n".join(sections)
 
 
 def _main() -> None:
-    args = [a for a in sys.argv[1:] if a != "--pilot"]
-    pilot = "--pilot" in sys.argv[1:]
-    run_dir = Path(args[0])
-    config = yaml.safe_load(Path(args[1] if len(args) > 1 else "configs/hr_config.yaml").read_text())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("config", type=Path, nargs="?", default=Path("configs/hr_config.yaml"))
+    parser.add_argument("--pilot", action="store_true")
+    parser.add_argument("--new-methods", help=f"comma-separated, from {','.join(NEW_METHODS)}; deletes by blurring")
+    parser.add_argument("--stage", choices=("val", "test"), default="test")
+    args = parser.parse_args()
+    config = yaml.safe_load(args.config.read_text())
+
+    methods, tag = METHODS, ""
+    if args.new_methods:
+        methods = tuple(args.new_methods.split(","))
+        unknown = set(methods) - set(NEW_METHODS)
+        if unknown:
+            parser.error(f"unknown methods: {sorted(unknown)}")
+        config["xai_deletion_fill"] = "blur"
+        tag = f"_new_{args.stage}"
     started = time.monotonic()
-    report = run_xai(run_dir, config, pilot) + f"\n{(time.monotonic() - started) / 60:.1f} min in total.\n"
-    out_path = Path("reports") / f"xai_results_{run_dir.name}{'_pilot' if pilot else ''}.md"
+    report = run_xai(args.run_dir, config, args.pilot, methods, args.stage, tag)
+    report += f"\n{(time.monotonic() - started) / 60:.1f} min in total.\n"
+    out_path = Path("reports") / f"xai_results_{args.run_dir.name}{tag}{'_pilot' if args.pilot else ''}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report)
     print(f"Wrote {out_path}")

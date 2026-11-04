@@ -82,6 +82,8 @@ xai_check_tiles: 200                   # per test split, for the two checks belo
 xai_pilot_check_tiles: 25
 xai_delete_fractions: [0.1, 0.2, 0.3, 0.5]
 xai_top_overlap_fraction: 0.2
+xai_deletion_fill: mean                # mean = train mean colour; blur = a heavily blurred tile
+xai_blur_sigma: 16                     # pixels, half a 32-pixel grid cell
 xai_latency_runs: 10
 xai_figure_dir: reports/figures/xai
 # Fixed before any result: a map at or above these mean rank correlations fails.

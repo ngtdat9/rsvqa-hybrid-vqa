@@ -5,11 +5,16 @@ import pytest
 import torch
 
 from src.explain import (
+    blur_image,
     choose_map,
     deletion_effect,
     delete_top_patches,
+    _attention_with_weights,
     explain_batch,
+    explain_methods,
+    gradient_attention_map,
     balanced_sample,
+    occlusion_map,
     paired_summary,
     question_pairs,
     question_pool,
@@ -144,6 +149,69 @@ def test_grad_cam_follows_the_definition():
     assert torch.allclose(explain_batch(model, batch).maps["grad_cam"], expected.detach(), atol=1e-6)
 
 
+def test_attention_with_weights_matches_pytorch():
+    attention = make_model().fusion.attn
+    query, key = torch.randn(2, 5, 32), torch.randn(2, 9, 32)
+    with torch.no_grad():
+        expected, expected_weights = attention(query, key, key, need_weights=True, average_attn_weights=False)
+        output, weights = _attention_with_weights(attention, query, key, key)
+    assert torch.allclose(output, expected, atol=1e-5)
+    assert torch.allclose(weights, expected_weights, atol=1e-5)
+
+
+def test_gradient_attention_leaves_the_model_as_it_was_and_gives_a_finite_map():
+    model, batch = make_model(), make_batch()
+    with torch.no_grad():
+        before = model(batch)
+    result = gradient_attention_map(model, batch)
+    assert result.shape == (3, 64) and result.isfinite().all() and (result >= 0).all()
+    assert all("forward" not in layer.self_attn.__dict__ for layer in model.encoder.transformer.layers)
+    with torch.no_grad():
+        after = model(batch)
+    assert torch.equal(before["class_logits"], after["class_logits"])
+
+
+def test_gradient_attention_sees_the_real_forward_pass():
+    # with the patch in place the model must still give the same answer as PyTorch's attention
+    model, batch = make_model(), make_batch()
+    modules = [layer.self_attn for layer in model.encoder.transformer.layers] + [model.fusion.attn]
+    with torch.no_grad():
+        expected = model(batch)["class_logits"]
+    for module in modules:
+        module.forward = lambda q, k, v, _m=module, **_: (_attention_with_weights(_m, q, k, v)[0], None)
+    logits = model(batch)["class_logits"]
+    for module in modules:
+        del module.forward
+    assert torch.allclose(logits, expected, atol=1e-5)
+
+
+def test_gradient_attention_depends_on_what_is_being_explained():
+    model, batch = make_model(), make_batch(count_rows=())
+    as_class = gradient_attention_map(model, batch)
+    as_count = gradient_attention_map(model, {**batch, "count_target": torch.full((3,), 3.0)})
+    assert not torch.allclose(as_class, as_count)
+
+
+def test_occlusion_matches_blanking_each_cell_by_hand():
+    model, batch = make_model(), make_batch()
+    base = explain_batch(model, batch)
+    result = occlusion_map(model, batch, base.class_logits, base.count_pred, 64)
+    assert result.shape == (3, 64)
+    scores = torch.zeros(3, 64)
+    scores[:, 10] = 1.0
+    with torch.no_grad():
+        outputs = model({**batch, "image": delete_top_patches(batch["image"], scores, 1 / 64)})
+    expected = deletion_effect(
+        base.class_logits, base.count_pred, outputs["class_logits"], outputs["count_pred"], ~batch["count_target"].isnan(),
+    )[0]
+    assert torch.allclose(result[:, 10], expected, atol=1e-6)
+
+
+def test_explain_methods_keeps_only_what_was_asked_for():
+    explanation = explain_methods(make_model(), make_batch(), ("gradient_attention", "occlusion"))
+    assert set(explanation.maps) == {"gradient_attention", "occlusion"}
+
+
 def test_explaining_refuses_training_mode_and_concat_fusion():
     model = make_model().train()
     with pytest.raises(ValueError, match="eval"):
@@ -162,6 +230,19 @@ def test_delete_top_patches_blanks_the_right_cells_only():
     assert torch.equal(delete_top_patches(image, scores, 0.25)[0, 0], expected)
     expected[2:, :2] = 0.0
     assert torch.equal(delete_top_patches(image, scores, 0.5)[0, 0], expected)
+
+
+def test_delete_top_patches_can_fill_from_another_image():
+    image, fill = torch.ones(1, 3, 4, 4), torch.full((1, 3, 4, 4), 5.0)
+    result = delete_top_patches(image, torch.tensor([[0.0, 3.0, 2.0, 1.0]]), 0.25, fill)[0, 0]
+    assert result[0, 3] == 5.0 and result[3, 0] == 1.0
+
+
+def test_blur_keeps_the_shape_and_removes_detail():
+    image = torch.randn(2, 3, 32, 32)
+    blurred = blur_image(image, 4.0)
+    assert blurred.shape == image.shape
+    assert blurred.std() < image.std() / 3
 
 
 def test_a_non_square_map_raises():
@@ -321,7 +402,7 @@ def xai_config(tmp_path: Path) -> dict:
         question_embed_dim=32, fusion_hidden_dim=32, fusion_type="cross_attention", mixed_precision=False,
         xai_seed=0, xai_batch_size=2, xai_questions_per_group=3, xai_pilot_questions_per_group=1,
         xai_check_tiles=2, xai_pilot_check_tiles=1, xai_delete_fractions=[0.1, 0.5], xai_top_overlap_fraction=0.2,
-        xai_latency_runs=1, xai_figure_dir=str(tmp_path / "figures"), xai_sanity_max_correlation=0.5,
+        xai_deletion_fill="mean", xai_blur_sigma=4, xai_latency_runs=1, xai_figure_dir=str(tmp_path / "figures"), xai_sanity_max_correlation=0.5,
         xai_question_max_correlation=0.9,
     )
     return config
@@ -361,3 +442,14 @@ def test_run_xai_pilot_uses_its_own_sample_size_and_folder(trained_run, tmp_path
     report = run_xai(run_dir, config, pilot=True)
     assert "(pilot subsets)" in report
     assert list((tmp_path / "figures" / "pilot").glob("*.png"))
+
+
+def test_new_methods_run_on_val_with_blurred_deletion(trained_run, tmp_path: Path):
+    run_dir, config = trained_run
+    config = {**config, "xai_deletion_fill": "blur"}
+    report = run_xai(run_dir, config, methods=("gradient_attention", "occlusion"), stage="val", tag="_new_val")
+    assert "Splits: val. Deleted cells are replaced with: blur." in report
+    assert "## Deletion test: val\n" in report and "## Deletion test: test" not in report
+    assert "| gradient_attention |" in report and "| occlusion |" in report
+    assert "| rollout |" not in report
+    assert list((tmp_path / "figures" / "run_new_val").glob("*.png"))
