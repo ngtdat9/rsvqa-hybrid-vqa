@@ -17,7 +17,7 @@ follows.
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
-<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="765">
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="784">
 
 <details><summary>Table as text</summary>
 
@@ -31,7 +31,8 @@ follows.
 | `configs/hr_config.yaml` | Done — HR dataset layout, area ranges, tuned training settings |
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py` | Done: zero-shot CLIP on the complete test sets |
-| `src/rag/`, `src/explain.py` | Not started (Weeks 5-6) |
+| `src/explain.py` | Done: attention and Grad-CAM maps with deletion and sanity tests; no map qualified as evidence |
+| `src/rag/` | Not started (Week 6) |
 
 </details>
 
@@ -68,7 +69,7 @@ same model, optimizer, schedule, early-stopping and random state.
 Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. The Week 4 full
 run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
 
-**Next:** Week 5 (XAI).
+**Next:** Week 6 (RAG explanations).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -398,6 +399,63 @@ template was chosen on validation, and each test set was scored once. Report:
   weighting did not change the choice.
 - **Unexplained:** CLIP scores 5.5 points higher on `test_phili` than on `test`, while our model drops 13.4.
 
+### Explainability (XAI, `hr_full` model)
+
+Three maps per answer: **cross-attention** (question words to patches), **rollout** (that attention traced
+back through the encoder, since the fusion never reads CLS) and **Grad-CAM** (last CNN stage). Each is tested
+by blanking its top patches and rerunning the model, against a random map. The rule for choosing a map was
+fixed before any result: the largest deletion effect among maps that beat random on every question type and
+pass both checks below. Sample: up to 250 right and 250 wrong answers per question type and test set (3,829
+questions). Report: `reports/xai_results_hr_full_20261031-090319.md`.
+
+**Result: no map qualifies, so the maps must not be presented as evidence for an answer.**
+
+<img src="reports/figures/table_12.png" alt="Explainability (XAI, `hr_full` model): Map, Beats random on, Correlation with random weights (limit 0.5), Correlation between two questions (limit 0.9), Outcome" width="867">
+
+<details><summary>Table as text</summary>
+
+| Map | Beats random on | Correlation with random weights (limit 0.5) | Correlation between two questions (limit 0.9) | Outcome |
+|---|---|---|---|---|
+| Cross-attention | No type | 0.001 | 0.847 | Fails: not better than random |
+| Rollout | All 4 types | 0.077 | **0.967** | Fails: barely changes with the question |
+| Grad-CAM | Count only | 0.084 | 0.134 | Fails: not better than random; blank on 314 of 3,829 |
+
+</details>
+
+Rollout's deletion effect against the random map, by test set (probability drop, or log1p change for count):
+
+<img src="reports/figures/table_13.png" alt="Explainability (XAI, `hr_full` model): Type, test rollout, test random, test_phili rollout, test_phili random" width="704">
+
+<details><summary>Table as text</summary>
+
+| Type | `test` rollout | `test` random | `test_phili` rollout | `test_phili` random |
+|---|---|---|---|---|
+| Presence | 0.080 | 0.038 | 0.056 | 0.058 |
+| Comparison | 0.084 | 0.057 | 0.022 | 0.024 |
+| Area | 0.088 | 0.048 | 0.076 | 0.076 |
+| Count | 0.313 | 0.175 | 0.145 | 0.133 |
+
+</details>
+
+- **Rollout finds regions that matter, but not per question.** It beats random clearly on `test`, yet its map
+  for two different questions on one tile is nearly the same. It works as a general map of what matters in a
+  tile, not as an explanation of a particular answer.
+- **That advantage disappears in Philadelphia.** Rollout about ties random on all four types there. The pooled
+  result hides this. No confidence intervals per test set were computed, and the cause is not established.
+- **The random map is a harsh baseline.** Blanking one compact random patch changes answers less than scattered
+  cells do. Against that secondary control, added after the pilot, rollout wins on all 4 types, cross-attention
+  on 3 and Grad-CAM on 2. It does not change the outcome.
+- **Limits.** RSVQA has no object masks, so nothing here measures whether a map points at the right object. The
+  sample is balanced between right and wrong answers, so its averages are not population averages. The limits
+  of 0.5 and 0.9 are judgment calls.
+
+Examples, the presence figures for both test sets, right and wrong (tiles chosen by a fixed rule, not by appearance):
+
+<img src="reports/figures/xai/test_presence_right.png" alt="XAI maps, test set, presence question answered correctly" width="825">
+<img src="reports/figures/xai/test_presence_wrong.png" alt="XAI maps, test set, presence question answered wrongly" width="825">
+<img src="reports/figures/xai/test_phili_presence_right.png" alt="XAI maps, Philadelphia, presence question answered correctly" width="825">
+<img src="reports/figures/xai/test_phili_presence_wrong.png" alt="XAI maps, Philadelphia, presence question answered wrongly" width="825">
+
 ## Key design decisions
 
 - **Count questions are a regression target**, not a classification bucket.
@@ -527,7 +585,7 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
-<img src="reports/figures/table_12.png" alt="Configuration: Key, Meaning" width="859">
+<img src="reports/figures/table_14.png" alt="Configuration: Key, Meaning" width="859">
 
 <details><summary>Table as text</summary>
 
@@ -569,7 +627,7 @@ src/
 ├── rag/                   # retrieval + LLM explanation layer (not started)
 ├── train.py
 ├── evaluate.py
-└── explain.py             # attention rollout + Grad-CAM (not started)
+└── explain.py             # attention rollout + Grad-CAM, with faithfulness tests
 scripts/
 ├── download_rsvqa_hr.py   # resumable HR download from Zenodo
 ├── inspect_rsvqa.py       # dataset inspection (LR or HR), suggests config values
