@@ -17,7 +17,7 @@ follows.
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
-<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="784">
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="765">
 
 <details><summary>Table as text</summary>
 
@@ -31,7 +31,7 @@ follows.
 | `configs/hr_config.yaml` | Done — HR dataset layout, area ranges, tuned training settings |
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py` | Done: zero-shot CLIP on the complete test sets |
-| `src/explain.py` | Done: attention and Grad-CAM maps with deletion and sanity tests; no map qualified as evidence |
+| `src/explain.py` | Done: five maps with deletion and sanity tests; occlusion confirmed on both test sets, the first three maps failed |
 | `src/rag/` | Not started (Week 6) |
 
 </details>
@@ -408,9 +408,12 @@ fixed before any result: the largest deletion effect among maps that beat random
 pass both checks below. Sample: up to 250 right and 250 wrong answers per question type and test set (3,829
 questions). Report: `reports/xai_results_hr_full_20261031-090319.md`.
 
-**Result: no map qualifies, so the maps must not be presented as evidence for an answer.**
+**Final result: occlusion qualifies on both test sets (see Second attempt below).** The first attempt, described
+here, ended with no map qualifying.
 
-<img src="reports/figures/table_12.png" alt="Explainability (XAI, `hr_full` model): Map, Beats random on, Correlation with random weights (limit 0.5), Correlation between two questions (limit 0.9), Outcome" width="867">
+#### First attempt: attention and Grad-CAM
+
+<img src="reports/figures/table_12.png" alt="First attempt: attention and Grad-CAM: Map, Beats random on, Correlation with random weights (limit 0.5), Correlation between two questions (limit 0.9), Outcome" width="867">
 
 <details><summary>Table as text</summary>
 
@@ -424,7 +427,7 @@ questions). Report: `reports/xai_results_hr_full_20261031-090319.md`.
 
 Rollout's deletion effect against the random map, by test set (probability drop, or log1p change for count):
 
-<img src="reports/figures/table_13.png" alt="Explainability (XAI, `hr_full` model): Type, test rollout, test random, test_phili rollout, test_phili random" width="704">
+<img src="reports/figures/table_13.png" alt="First attempt: attention and Grad-CAM: Type, test rollout, test random, test_phili rollout, test_phili random" width="704">
 
 <details><summary>Table as text</summary>
 
@@ -455,6 +458,56 @@ Examples, the presence figures for both test sets, right and wrong (tiles chosen
 <img src="reports/figures/xai/test_presence_wrong.png" alt="XAI maps, test set, presence question answered wrongly" width="825">
 <img src="reports/figures/xai/test_phili_presence_right.png" alt="XAI maps, Philadelphia, presence question answered correctly" width="825">
 <img src="reports/figures/xai/test_phili_presence_wrong.png" alt="XAI maps, Philadelphia, presence question answered wrongly" width="825">
+
+#### Second attempt: occlusion
+
+After that failure, two further maps were tried: **gradient-weighted attention** (Chefer et al., 2021, every
+attention step weighted by its gradient for this answer) and **occlusion** (grey out each grid cell in turn and
+measure how much the answer changes, 256 model runs per question). The limits and the rule stayed the same.
+Deletion changed from the mean colour to a blur, because occlusion builds its map with grey and would otherwise
+be tested by the same operation. Both maps were run on val, and only the winner went to the test sets, once.
+Reports: `reports/xai_results_hr_full_20261031-090319_new_val.md` and `_new_test.md`.
+
+<img src="reports/figures/table_14.png" alt="Second attempt: occlusion: Map, Stage (questions), Standardized effect: presence / comparison / area / count, Correlation with random weights (limit 0.5), Correlation between two questions (limit 0.9), Outcome" width="868">
+
+<details><summary>Table as text</summary>
+
+| Map | Stage (questions) | Standardized effect: presence / comparison / area / count | Correlation with random weights (limit 0.5) | Correlation between two questions (limit 0.9) | Outcome |
+|---|---|---|---|---|---|
+| Gradient-weighted attention | val (1,538) | 0.25 / 0.18 / 0.18 / 0.53 | -0.015 | 0.352 | Qualifies, not chosen: smaller effect |
+| Occlusion | val (1,538) | 0.79 / 0.74 / 0.90 / 0.63 | 0.023 | 0.101 | Qualifies, chosen |
+| Occlusion | both test sets (3,829) | 0.78 / 0.79 / 0.80 / 0.50 | 0.024 | 0.114 | **Confirmed** |
+
+</details>
+
+Occlusion's deletion effect against the random map, by test set (probability drop, or log1p change for count), with
+the 95% lower bound on the difference:
+
+<img src="reports/figures/table_15.png" alt="Second attempt: occlusion: Type, test occlusion, test random, test lower bound, test_phili occlusion, test_phili random, test_phili lower bound" width="861">
+
+<details><summary>Table as text</summary>
+
+| Type | `test` occlusion | `test` random | `test` lower bound | `test_phili` occlusion | `test_phili` random | `test_phili` lower bound |
+|---|---|---|---|---|---|---|
+| Presence | 0.143 | 0.028 | 0.101 | 0.139 | 0.017 | 0.108 |
+| Comparison | 0.191 | 0.038 | 0.135 | 0.142 | 0.004 | 0.122 |
+| Area | 0.159 | 0.034 | 0.113 | 0.141 | 0.028 | 0.100 |
+| Count | 0.312 | 0.175 | 0.117 | 0.135 | 0.081 | 0.044 |
+
+</details>
+
+- **It holds in Philadelphia**, the city the model never saw and where rollout tied random. Count is the weakest
+  type there: the answer changes on 21.9% of deletions, against 15.2% for random.
+- **Faithful does not mean correct.** The map shows what this model relied on, including when it is wrong. It says
+  nothing about whether that region contains the object asked about, because RSVQA has no object masks.
+- **The test favours this method.** Occlusion measures the answer's sensitivity to removing a cell, and deletion
+  checks much the same thing. Blurring reduces this advantage but does not remove it.
+- **The two attempts are not like for like.** The first three maps were not rerun with blur, so this does not show
+  that occlusion beats them under equal conditions. Rollout would still fail on its question correlation, which
+  deletion does not affect.
+- **Other limits.** Most answers survive deletion: on presence, comparison and area the answer changes on 22-33% of
+  deletions. The all-constant check found 3 maps of 3,829. The sample limits above still apply. Each answer takes
+  1.48 s with its maps on a T4, against 0.009 s for the first three maps.
 
 ## Key design decisions
 
@@ -585,7 +638,7 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
-<img src="reports/figures/table_14.png" alt="Configuration: Key, Meaning" width="859">
+<img src="reports/figures/table_16.png" alt="Configuration: Key, Meaning" width="859">
 
 <details><summary>Table as text</summary>
 
@@ -627,7 +680,7 @@ src/
 ├── rag/                   # retrieval + LLM explanation layer (not started)
 ├── train.py
 ├── evaluate.py
-└── explain.py             # attention rollout + Grad-CAM, with faithfulness tests
+└── explain.py             # attention, Grad-CAM and occlusion maps, with faithfulness tests
 scripts/
 ├── download_rsvqa_hr.py   # resumable HR download from Zenodo
 ├── inspect_rsvqa.py       # dataset inspection (LR or HR), suggests config values
