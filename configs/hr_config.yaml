@@ -72,3 +72,18 @@ clip_prompt_templates:
   - "{question} {answer}"
   - "Question: {question} Answer: {answer}"
   - "An aerial image. Question: {question} Answer: {answer}"
+
+# --- explainability (src/explain.py) ---
+xai_seed: 0
+xai_batch_size: 32
+xai_questions_per_group: 250           # per test split, question type, and right or wrong answer
+xai_pilot_questions_per_group: 25
+xai_check_tiles: 200                   # per test split, for the two checks below
+xai_pilot_check_tiles: 25
+xai_delete_fractions: [0.1, 0.2, 0.3, 0.5]
+xai_top_overlap_fraction: 0.2
+xai_latency_runs: 10
+xai_figure_dir: reports/figures/xai
+# Fixed before any result: a map at or above these mean rank correlations fails.
+xai_sanity_max_correlation: 0.5        # trained model vs random weights
+xai_question_max_correlation: 0.9      # two different questions on the same tile
