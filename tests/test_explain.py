@@ -6,6 +6,7 @@ import torch
 
 from src.explain import (
     blur_image,
+    cells_in_or_beside,
     choose_map,
     deletion_effect,
     delete_top_patches,
@@ -14,6 +15,7 @@ from src.explain import (
     explain_methods,
     gradient_attention_map,
     balanced_sample,
+    no_data_cells,
     occlusion_map,
     paired_summary,
     question_pairs,
@@ -23,8 +25,10 @@ from src.explain import (
     randomized_copy,
     rank_scores,
     rollout_matrix,
+    run_followup,
     run_xai,
     spearman,
+    top_cell_share,
     top_overlap,
     word_attention_map,
 )
@@ -282,6 +286,34 @@ def test_random_block_deletes_one_connected_patch_of_the_right_size():
         assert seen == cells
 
 
+def test_no_data_cells_finds_black_cells_and_ignores_dark_ones():
+    pixels = torch.full((2, 3, 8, 8), 0.5)
+    pixels[0, :, :2, :4] = 0.0  # a strip across the top-left cell's top half
+    pixels[1, :2, 4:, 4:] = 0.0  # black in only two channels, so not black
+    found = no_data_cells(pixels, grid=2, pixel_value=0.01, cell_fraction=0.25)
+    assert found.tolist() == [[True, False, False, False], [False, False, False, False]]
+    assert not no_data_cells(pixels, grid=2, pixel_value=0.01, cell_fraction=0.75).any()
+
+
+def test_a_cell_needs_enough_black_pixels():
+    pixels = torch.full((1, 3, 8, 8), 0.5)
+    pixels[0, :, 0, 0] = 0.0
+    assert not no_data_cells(pixels, grid=2, pixel_value=0.01, cell_fraction=0.25).any()
+
+
+def test_cells_in_or_beside_grows_to_the_eight_neighbours():
+    cells = torch.zeros(1, 16, dtype=torch.bool)
+    cells[0, 5] = True  # row 1, column 1 of a 4x4 grid
+    grown = cells_in_or_beside(cells)
+    assert grown[0].nonzero().flatten().tolist() == [0, 1, 2, 4, 5, 6, 8, 9, 10]
+
+
+def test_top_cell_share_counts_the_top_cells_inside_the_zone():
+    scores = torch.tensor([[4.0, 3.0, 2.0, 1.0], [1.0, 2.0, 3.0, 4.0]])
+    zone = torch.tensor([[True, False, False, False]] * 2)
+    assert top_cell_share(scores, zone, 0.5).tolist() == [0.5, 0.0]
+
+
 def test_deletion_effect_uses_the_right_measure_per_row():
     base = torch.log(torch.tensor([[0.8, 0.2], [0.5, 0.5]]))
     after = torch.log(torch.tensor([[0.3, 0.7], [0.5, 0.5]]))
@@ -403,7 +435,7 @@ def xai_config(tmp_path: Path) -> dict:
         xai_seed=0, xai_batch_size=2, xai_questions_per_group=3, xai_pilot_questions_per_group=1,
         xai_check_tiles=2, xai_pilot_check_tiles=1, xai_delete_fractions=[0.1, 0.5], xai_top_overlap_fraction=0.2,
         xai_deletion_fill="mean", xai_blur_sigma=4, xai_latency_runs=1, xai_figure_dir=str(tmp_path / "figures"), xai_sanity_max_correlation=0.5,
-        xai_question_max_correlation=0.9,
+        xai_question_max_correlation=0.9, xai_nodata_pixel_value=0.01, xai_nodata_cell_fraction=0.25, xai_followup_figures=1,
     )
     return config
 
@@ -455,3 +487,28 @@ def test_new_methods_run_on_val_with_blurred_deletion(trained_run, tmp_path: Pat
     assert "| rollout |" not in report
     assert "alone (does not decide" not in report  # only one split
     assert list((tmp_path / "figures" / "run_new_val").glob("*.png"))
+
+
+def test_followup_reports_strips_and_all_maps_under_blur(trained_run, tmp_path: Path):
+    run_dir, config = trained_run
+    report = run_followup(run_dir, config)
+    assert "Deleted cells are replaced with: blur." in report
+    assert "## How common no-data strips are" in report and "## Occlusion without the strip tiles" in report
+    assert "## Where the top 20% of cells fall on strip tiles" in report
+    for method in ("cross_attention", "rollout", "grad_cam", "occlusion"):
+        assert f"- `{method}`:" in report
+    assert "Against the random map, blur: pooled" in report and "Against the random map, blur: test_phili" in report
+    assert list((tmp_path / "figures" / "run_followup").glob("*.png"))
+
+
+def test_followup_separates_strip_tiles_from_the_rest(trained_run, tmp_path: Path, monkeypatch):
+    """With every tile black, all questions are strip questions and none are left without strips."""
+    import src.explain as explain
+
+    monkeypatch.setattr(explain, "no_data_cells", lambda pixels, grid, *_: torch.ones(pixels.size(0), grid * grid, dtype=torch.bool, device=pixels.device))
+    run_dir, config = trained_run
+    report = run_followup(run_dir, config)
+    assert "- pooled: does not beat random on:" in report  # nothing left to beat it with
+    assert "| without strips |" not in report
+    assert "| only strips |" in report
+    assert list((tmp_path / "figures" / "run_followup").glob("*_strip_1.png"))

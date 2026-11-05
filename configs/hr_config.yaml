@@ -86,6 +86,10 @@ xai_deletion_fill: mean                # mean = train mean colour; blur = a heav
 xai_blur_sigma: 16                     # pixels, half a 32-pixel grid cell
 xai_latency_runs: 10
 xai_figure_dir: reports/figures/xai
+# Follow-up run. A no-data cell has this share of black pixels; thin strips must still count, hence not 0.5.
+xai_nodata_pixel_value: 0.01           # 0-1 range, in every channel
+xai_nodata_cell_fraction: 0.25
+xai_followup_figures: 6                # per split, each of: correct "yes" presence answers, strip tiles
 # Fixed before any result: a map at or above these mean rank correlations fails.
 xai_sanity_max_correlation: 0.5        # trained model vs random weights
 xai_question_max_correlation: 0.9      # two different questions on the same tile

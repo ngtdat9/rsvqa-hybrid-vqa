@@ -15,6 +15,11 @@ Two further maps, added after those three failed, are selected on val and confir
 
     python -m src.explain <run_dir> configs/hr_config.yaml [--pilot]
     python -m src.explain <run_dir> configs/hr_config.yaml --new-methods occlusion,gradient_attention --stage val
+
+A follow-up after occlusion was confirmed, which cannot change that choice: whether black no-data
+strips drive the result, and how the first three maps do under the same blur deletion.
+
+    python -m src.explain <run_dir> configs/hr_config.yaml --followup [--pilot]
 """
 from __future__ import annotations
 
@@ -272,6 +277,26 @@ def delete_top_patches(
     return image * (1 - mask) if fill is None else image * (1 - mask) + fill * mask
 
 
+def no_data_cells(pixels: torch.Tensor, grid: int, pixel_value: float, cell_fraction: float) -> torch.Tensor:
+    """[B,N], True for grid cells where at least ``cell_fraction`` of the pixels are black in
+    every channel. ``pixels`` is [B,3,H,W] in the original 0-1 range, before normalization."""
+    black = (pixels.amax(dim=1, keepdim=True) <= pixel_value).float()
+    return F.adaptive_avg_pool2d(black, grid).flatten(1) >= cell_fraction
+
+
+def cells_in_or_beside(cells: torch.Tensor) -> torch.Tensor:
+    """[B,N] mask grown to the eight neighbouring cells."""
+    grid = round(math.sqrt(cells.size(1)))
+    grown = F.max_pool2d(cells.float().view(-1, 1, grid, grid), kernel_size=3, stride=1, padding=1)
+    return grown.flatten(1).bool()
+
+
+def top_cell_share(scores: torch.Tensor, zone: torch.Tensor, fraction: float) -> torch.Tensor:
+    """Per row, the share of the top ``fraction`` of cells that fall inside ``zone``."""
+    top = scores.topk(max(1, round(fraction * scores.size(1))), dim=1).indices
+    return zone.gather(1, top).float().mean(dim=1)
+
+
 def deletion_effect(
     base_logits: torch.Tensor, base_count: torch.Tensor, logits: torch.Tensor, count: torch.Tensor,
     is_count: torch.Tensor,
@@ -431,6 +456,12 @@ class SplitResult:
     overlap: dict[tuple[str, str], list[torch.Tensor]] = field(default_factory=lambda: defaultdict(list))
     flat_maps: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     figures: list[Path] = field(default_factory=list)
+    no_data: list[torch.Tensor] = field(default_factory=list)  # [B], no-data cells per question
+    zone_share: list[torch.Tensor] = field(default_factory=list)  # [B], share of the tile in or beside no-data cells
+    top_in_zone: dict[str, list[torch.Tensor]] = field(default_factory=lambda: defaultdict(list))  # [B]
+
+    def has_strip(self) -> torch.Tensor:
+        return torch.cat(self.no_data) > 0
 
 
 def _loader(dataset: Dataset, indices: list[int], config: dict[str, Any]) -> DataLoader:
@@ -462,22 +493,35 @@ def predict_correct(
 def score_split(
     model: nn.Module, dataset: Any, indices: list[int], config: dict[str, Any], device: torch.device,
     generator: torch.Generator, split: str, figure_dir: Path, methods: tuple[str, ...] = METHODS,
+    extra_figures: int = 0,
 ) -> SplitResult:
     """Deletion test, agreement between maps, and one right and one wrong figure per type.
-    The figures are the first of each kind in the random sample, whatever their maps show."""
+    The figures are the first of each kind in the random sample, whatever their maps show.
+    ``extra_figures`` adds that many of two more kinds: presence questions answered "yes"
+    correctly, where there is an object to point at, and tiles with a no-data strip."""
     result = SplitResult()
     fractions = config["xai_delete_fractions"]
     records = dataset.qa_records
     drawn: set[tuple[str, bool]] = set()
+    extra_drawn: dict[str, int] = defaultdict(int)
     position = 0
     for batch in tqdm(_loader(dataset, indices, config), desc=f"explain {split}", leave=False, unit="batch"):
         batch = prepare_batch(batch, device, dataset)
         explanation = explain_methods(model, batch, methods)
         fill = blur_image(batch["image"], config["xai_blur_sigma"]) if config["xai_deletion_fill"] == "blur" else None
+        mean = dataset.image_mean.to(device).view(3, 1, 1)
+        std = dataset.image_std.to(device).view(3, 1, 1)
+        pixels = batch["image"] * std + mean
         is_count = ~batch["count_target"].isnan()
         correct = _is_correct(explanation.class_logits, explanation.count_pred, batch)
         maps = dict(explanation.maps)
         shape = maps[methods[0]].shape
+        no_data = no_data_cells(
+            pixels, round(math.sqrt(shape[1])), config["xai_nodata_pixel_value"], config["xai_nodata_cell_fraction"],
+        )
+        zone = cells_in_or_beside(no_data)
+        result.no_data.append(no_data.sum(dim=1).cpu())
+        result.zone_share.append(zone.float().mean(dim=1).cpu())
         maps[CONTROL] = torch.rand(shape, generator=generator).to(device)
         maps[BLOCK_CONTROL] = random_block_map(shape, generator).to(device)
 
@@ -490,6 +534,7 @@ def score_split(
 
         for method, values in maps.items():
             scores = rank_scores(values, generator)
+            result.top_in_zone[method].append(top_cell_share(scores, zone, config["xai_top_overlap_fraction"]).cpu())
             effects, changed = [], []
             for fraction in fractions:
                 deleted = {**batch, "image": delete_top_patches(batch["image"], scores, fraction, fill)}
@@ -504,20 +549,30 @@ def score_split(
             result.effects[method].append(torch.stack(effects, dim=1))
             result.changed[method].append(torch.stack(changed, dim=1))
 
-        mean = dataset.image_mean.to(device).view(3, 1, 1)
-        std = dataset.image_std.to(device).view(3, 1, 1)
         for row, is_right in enumerate(correct):
             record = records[indices[position + row]]
             kind = (record["type"], is_right)
+            names = []
             if kind not in drawn:
                 drawn.add(kind)
-                path = figure_dir / f"{split}_{record['type']}_{'right' if is_right else 'wrong'}.png"
+                names.append(f"{split}_{record['type']}_{'right' if is_right else 'wrong'}")
+            extras = []
+            if record["type"] == "presence" and record["answer"] == "yes" and is_right:
+                extras.append("presence_yes")
+            if no_data[row].any():
+                extras.append("strip")
+            for extra in extras:
+                if extra_drawn[extra] < extra_figures:
+                    extra_drawn[extra] += 1
+                    names.append(f"{split}_{extra}_{extra_drawn[extra]}")
+            for name in names:
+                path = figure_dir / f"{name}.png"
                 predicted = _answer_text(
                     explanation.class_logits[row], explanation.count_pred[row], bool(is_count[row]),
                     dataset.answer_vocab.idx_to_class,
                 )
                 save_example_figure(
-                    batch["image"][row] * std + mean, {m: explanation.maps[m][row] for m in methods},
+                    pixels[row], {m: explanation.maps[m][row] for m in methods},
                     record["question"], record["answer"], predicted, path,
                 )
                 result.figures.append(path)
@@ -621,15 +676,21 @@ def _comparison_table(title: str, intro: str, comparison: dict[str, dict[str, di
 
 def compare_with_control(
     results: dict[str, SplitResult], types: list[str], control: str, methods: tuple[str, ...] = METHODS,
+    with_strip: bool | None = None,
 ) -> dict[str, dict[str, dict[str, float]]]:
-    """Per map and type, pooled over test splits: each question's effect minus the control's."""
+    """Per map and type, pooled over test splits: each question's effect minus the control's.
+    ``with_strip`` keeps only the questions on tiles with (True) or without (False) a no-data strip."""
     comparison: dict[str, dict[str, dict[str, float]]] = {}
     for method in methods:
         comparison[method] = {}
         for qtype in types:
             differences = []
             for result in results.values():
-                rows = [i for i, t in enumerate(result.types) if t == qtype]
+                strips = result.has_strip().tolist() if with_strip is not None else [None] * len(result.types)
+                rows = [
+                    i for i, t in enumerate(result.types)
+                    if t == qtype and (with_strip is None or strips[i] == with_strip)
+                ]
                 if rows:
                     per_question = torch.cat(result.effects[method])[rows] - torch.cat(result.effects[control])[rows]
                     differences.append(per_question.mean(dim=1))
@@ -741,6 +802,137 @@ def run_xai(
     return "\n".join(sections)
 
 
+def _beats_random(comparison: dict[str, dict[str, float]], types: list[str]) -> str:
+    """The types a map fails to beat random on, or says so if it beats it on all of them."""
+    failed = [qtype for qtype in types if qtype not in comparison or not comparison[qtype]["lower"] > 0]
+    return f"does not beat random on: {', '.join(failed)}" if failed else "beats random on every type"
+
+
+def run_followup(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> str:
+    """Scores the questions of the test run again, with all four maps under blur deletion, and
+    reports what no-data strips do to the result. Occlusion was already chosen and confirmed, so
+    this cannot change the choice; it can only limit what may be claimed for it."""
+    config = {**config, "cache_images": False, "xai_deletion_fill": "blur"}
+    if not pilot:
+        config["max_images_per_split"] = None
+    per_group = config["xai_pilot_questions_per_group" if pilot else "xai_questions_per_group"]
+    seed = config["xai_seed"]
+    torch.manual_seed(seed)
+    generator = torch.Generator().manual_seed(seed)
+    figure_dir = Path(config["xai_figure_dir"]) / (("pilot" if pilot else run_dir.name) + "_followup")
+    methods = (*METHODS, "occlusion")
+
+    model, dataloaders, device = load_run(run_dir, config)
+    model.eval()
+    splits = [s for s in config["splits"] if s.startswith("test")]
+    types = [*config["question_types"], "count"]
+    results: dict[str, SplitResult] = {}
+    for split in splits:
+        dataset = dataloaders[split].dataset
+        pool = question_pool(dataset.qa_records, seed)
+        correct = predict_correct(model, dataset, pool, config, device, f"predict {split}")
+        sample = balanced_sample(pool, dataset.qa_records, correct, per_group)
+        results[split] = score_split(
+            model, dataset, sample, config, device, generator, split, figure_dir, methods,
+            extra_figures=config["xai_followup_figures"],
+        )
+
+    groups = {"pooled": results, **{split: {split: results[split]} for split in splits}}
+    sections = [
+        f"# XAI follow-up: {run_dir.name}" + (" (pilot subsets)" if pilot else "") + "\n\n"
+        f"Splits: {', '.join(splits)}. Deleted cells are replaced with: blur. Same selection of questions as the "
+        "test run. This does not change the choice of map; it limits what may be claimed for it.\n"
+    ]
+
+    strip_rows = []
+    for split, result in results.items():
+        strips, cells = result.has_strip(), torch.cat(result.no_data).float()
+        for qtype in types:
+            rows = torch.tensor([t == qtype for t in result.types])
+            if rows.any():
+                with_strip = strips[rows]
+                size = cells[rows][with_strip].mean().item() if with_strip.any() else 0.0
+                strip_rows.append(
+                    f"| {split} | {qtype} | {rows.sum().item()} | {with_strip.sum().item()} "
+                    f"| {with_strip.float().mean().item():.1%} | {size:.1f} |\n"
+                )
+    sections.append(
+        "## How common no-data strips are\n\n"
+        f"A no-data cell has at least {config['xai_nodata_cell_fraction']:.0%} of its pixels black "
+        f"(at most {config['xai_nodata_pixel_value']} in every channel). A strip tile has at least one, so a large "
+        "dark shadow could also count: check the strip figures.\n\n"
+        "| Split | Type | Questions | On strip tiles | Share | No-data cells per strip tile |\n|---|---|---|---|---|---|\n"
+        + "".join(strip_rows)
+    )
+
+    verdicts, occlusion_rows = [], []
+    for group, scored in groups.items():
+        for label, with_strip in (("all", None), ("without strips", False), ("only strips", True)):
+            comparison = compare_with_control(scored, types, CONTROL, ("occlusion",), with_strip)["occlusion"]
+            if with_strip is False:
+                verdicts.append(f"- {group}: {_beats_random(comparison, types)}\n")
+            for qtype, row in comparison.items():
+                count = 0
+                for result in scored.values():
+                    strips = result.has_strip().tolist()
+                    count += sum(
+                        t == qtype and (with_strip is None or strips[i] == with_strip)
+                        for i, t in enumerate(result.types)
+                    )
+                occlusion_rows.append(
+                    f"| {group} | {label} | {qtype} | {count} | {row['mean']:.4f} | {row['lower']:.4f} "
+                    f"| {row['standardized']:.3f} |\n"
+                )
+    sections.append(
+        "## Occlusion without the strip tiles\n\n" + "".join(verdicts) + "\n"
+        "Per question, the effect averaged over deletion sizes, minus the random map's. \"only strips\" can rest on few "
+        "questions.\n\n"
+        "| Split | Questions kept | Type | Questions | Mean difference | 95% lower bound | Standardized |\n"
+        "|---|---|---|---|---|---|---|\n" + "".join(occlusion_rows)
+    )
+
+    fraction = config["xai_top_overlap_fraction"]
+    zone_rows = []
+    for split, result in results.items():
+        strips = result.has_strip()
+        if strips.any():
+            chance = torch.cat(result.zone_share)[strips].mean().item()
+            for method in (*methods, CONTROL, BLOCK_CONTROL):
+                share = torch.cat(result.top_in_zone[method])[strips].mean().item()
+                zone_rows.append(f"| {split} | {method} | {strips.sum().item()} | {share:.1%} | {chance:.1%} |\n")
+    sections.append(
+        f"## Where the top {fraction:.0%} of cells fall on strip tiles\n\n"
+        "Share of a map's top cells in or beside no-data cells, against that area's share of the tile.\n\n"
+        "| Split | Map | Questions | Top cells in or beside no-data | Share of the tile |\n|---|---|---|---|---|\n"
+        + "".join(zone_rows)
+    )
+
+    sections.append("## All four maps under blur deletion\n\nThe first three were first tested with mean-colour "
+                    "deletion. Their two correlation checks do not depend on deletion, so they stand as first reported.\n\n"
+                    + "".join(
+                        f"- `{method}`: {_beats_random(compare_with_control(results, types, CONTROL, methods)[method], types)}\n"
+                        for method in methods
+                    ))
+    for group, scored in groups.items():
+        sections.append(_comparison_table(
+            f"Against the random map, blur: {group}", "Effect averaged over deletion sizes, minus the random map's.",
+            compare_with_control(scored, types, CONTROL, methods),
+        ))
+    sections.append(_comparison_table(
+        "Against a random block, blur (secondary, pooled)", "The same, against one compact random patch.",
+        compare_with_control(results, types, BLOCK_CONTROL, methods),
+    ))
+    total = sum(len(result.types) for result in results.values())
+    sections.append(
+        "## All-constant maps\n\n| Map | All-constant |\n|---|---|\n" + "".join(
+            f"| {method} | {sum(result.flat_maps[method] for result in results.values())} of {total} |\n"
+            for method in methods
+        )
+    )
+    sections += [_split_table(split, results[split], config["xai_delete_fractions"], types, methods) for split in splits]
+    return "\n".join(sections)
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
@@ -748,11 +940,16 @@ def _main() -> None:
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--new-methods", help=f"comma-separated, from {','.join(NEW_METHODS)}; deletes by blurring")
     parser.add_argument("--stage", choices=("val", "test"), default="test")
+    parser.add_argument("--followup", action="store_true", help="no-data strips, and all maps under blur deletion")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
 
+    if args.followup and args.new_methods:
+        parser.error("--followup and --new-methods are separate runs")
     methods, tag = METHODS, ""
-    if args.new_methods:
+    if args.followup:
+        tag = "_followup"
+    elif args.new_methods:
         methods = tuple(args.new_methods.split(","))
         unknown = set(methods) - set(NEW_METHODS)
         if unknown:
@@ -760,7 +957,10 @@ def _main() -> None:
         config["xai_deletion_fill"] = "blur"
         tag = f"_new_{args.stage}"
     started = time.monotonic()
-    report = run_xai(args.run_dir, config, args.pilot, methods, args.stage, tag)
+    if args.followup:
+        report = run_followup(args.run_dir, config, args.pilot)
+    else:
+        report = run_xai(args.run_dir, config, args.pilot, methods, args.stage, tag)
     report += f"\n{(time.monotonic() - started) / 60:.1f} min in total.\n"
     out_path = Path("reports") / f"xai_results_{args.run_dir.name}{tag}{'_pilot' if args.pilot else ''}.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
