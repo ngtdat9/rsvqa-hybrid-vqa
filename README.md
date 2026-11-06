@@ -17,7 +17,7 @@ follows.
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
-<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="765">
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="787">
 
 <details><summary>Table as text</summary>
 
@@ -31,7 +31,7 @@ follows.
 | `configs/hr_config.yaml` | Done — HR dataset layout, area ranges, tuned training settings |
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py` | Done: zero-shot CLIP on the complete test sets |
-| `src/explain.py` | Done: five maps with deletion and sanity tests; occlusion confirmed on both test sets, the first three maps failed |
+| `src/explain.py` | Done: five maps with deletion and sanity tests; occlusion confirmed on both test sets and without no-data strips; the first three maps failed |
 | `src/rag/` | Not started (Week 6) |
 
 </details>
@@ -502,9 +502,7 @@ the 95% lower bound on the difference:
   nothing about whether that region contains the object asked about, because RSVQA has no object masks.
 - **The test favours this method.** Occlusion measures the answer's sensitivity to removing a cell, and deletion
   checks much the same thing. Blurring reduces this advantage but does not remove it.
-- **The two attempts are not like for like.** The first three maps were not rerun with blur, so this does not show
-  that occlusion beats them under equal conditions. Rollout would still fail on its question correlation, which
-  deletion does not affect.
+- **The first three maps were rerun with blur in a follow-up** (below), so the comparison is now like for like.
 - **Other limits.** Most answers survive deletion: on presence, comparison and area the answer changes on 22-33% of
   deletions. The all-constant check found 3 maps of 3,829. The sample limits above still apply. Each answer takes
   1.48 s with its maps on a T4, against 0.009 s for the first three maps.
@@ -514,9 +512,45 @@ or wrong answer), the strongest cells are mostly scattered and do not trace the 
 impression from a small sample, not a measurement. They should be read as "changing these cells changed the answer
 most", not as "the model looked at this object".
 
-**Unresolved: no-data strips.** On 2 of the 3 tiles in those figures with a black no-data strip, both Philadelphia
-count questions, the strongest cells sit in or beside the strip. Replacing black with grey is a large edit, so this
-may be an artifact of the map, and the strips may have contributed to the deletion results. Neither has been measured.
+#### Follow-up: no-data strips, and all maps under blur
+
+Run after occlusion was confirmed, on the same 3,829 questions, so it could not change the choice. Report:
+`reports/xai_results_hr_full_20261031-090319_followup.md`. A no-data cell is one with at least 25% of its pixels black
+in every channel; a strip tile has at least one. All 9 strip tiles checked by eye in the pilot had real strips.
+
+<img src="reports/figures/table_16.png" alt="Follow-up: no-data strips, and all maps under blur: Finding, test, test_phili" width="855">
+
+<details><summary>Table as text</summary>
+
+| Finding | `test` | `test_phili` |
+|---|---|---|
+| Sampled questions on strip tiles | 37 of 1,892 (2%) | 638 of 1,937 (33%) |
+| Occlusion beats random without strip tiles | Every type | Every type |
+| Occlusion's top 20% of cells in or beside the strip (strip tiles; chance in brackets) | 17.8% (12.7%) | 52.2% (21.7%) |
+| Occlusion's top 20% on the outer ring (tiles without strips; chance 23.4%) | 26.6% | 30.0% |
+| Rollout's top 20% on the outer ring (tiles without strips; chance 23.4%) | 45.9% | 52.2% |
+
+</details>
+
+- **Occlusion's confirmation stands.** Without the strip tiles it still beats random on every type, in each test set.
+  Its effect on strip tiles is smaller, most of all for count (standardized 0.34 against 0.54 without strips).
+- **On Philadelphia strip tiles, occlusion's strongest cells sit at the strip** at 2.4 times chance, far more than
+  its slight preference for edges elsewhere. Replacing black with grey is a large edit, so this may be how the method
+  behaves rather than how the model does; the two have not been separated.
+- **Rollout's pull towards strips is mostly a pull towards edges:** it puts about half its top cells on the outer ring
+  of tiles without strips too. This corrects an earlier reading of the pilot, which took rollout's strip result as a
+  sign that the model itself attends to strips.
+- **Strips do not explain the Philadelphia drop.** Over one question per tile and type, accuracy on Philadelphia strip
+  tiles is not consistently lower than on its other tiles (presence 79.8% against 78.1%, comparison 76.8% against
+  81.6%, area 69.9% against 64.1%, count 62.7% against 58.4%). This does not show the strips are harmless, since strip
+  tiles may differ in other ways.
+- **Under blur, Grad-CAM and cross-attention still fail.** Pooled, Grad-CAM does not beat random on presence,
+  comparison or area, and in Philadelphia it is worse than random on those three. Cross-attention fails on presence
+  and comparison. Rollout beats random on every type pooled (mean standardized 0.24, against occlusion's 0.72) but
+  still fails its question check (0.967), which deletion does not affect.
+- **Correct "yes" presence answers, where there is an object to point at,** show the same scattered maps in the 12
+  figures drawn: no map clearly traces the object. Occlusion measures one cell at a time, so for an object spread over
+  many cells, such as a road or many buildings, no single cell may matter much.
 
 Examples, the presence figures for both test sets, right and wrong (tiles chosen by a fixed rule, not by appearance),
 then one Philadelphia count figure, added by hand because it shows the strip:
@@ -526,6 +560,12 @@ then one Philadelphia count figure, added by hand because it shows the strip:
 <img src="reports/figures/xai/occlusion_test_phili_presence_right.png" alt="Occlusion map, Philadelphia, presence question answered correctly" width="825">
 <img src="reports/figures/xai/occlusion_test_phili_presence_wrong.png" alt="Occlusion map, Philadelphia, presence question answered wrongly" width="825">
 <img src="reports/figures/xai/occlusion_test_phili_count_wrong.png" alt="Occlusion map, Philadelphia, count question answered wrongly, strongest cells beside a black no-data strip" width="825">
+
+From the follow-up, all four maps under blur: the first correct "yes" presence answer on `test`, and the first
+Philadelphia strip tile (both chosen by rule):
+
+<img src="reports/figures/xai/followup_test_presence_yes_1.png" alt="All four maps, test set, correct yes answer to a presence question" width="880">
+<img src="reports/figures/xai/followup_test_phili_strip_1.png" alt="All four maps, Philadelphia tile with a black no-data strip along the top" width="880">
 
 ## Key design decisions
 
@@ -656,7 +696,7 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
-<img src="reports/figures/table_16.png" alt="Configuration: Key, Meaning" width="859">
+<img src="reports/figures/table_17.png" alt="Configuration: Key, Meaning" width="859">
 
 <details><summary>Table as text</summary>
 
