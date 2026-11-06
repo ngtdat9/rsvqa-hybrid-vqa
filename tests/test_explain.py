@@ -17,6 +17,7 @@ from src.explain import (
     balanced_sample,
     no_data_cells,
     occlusion_map,
+    outer_ring,
     paired_summary,
     question_pairs,
     question_pool,
@@ -308,6 +309,13 @@ def test_cells_in_or_beside_grows_to_the_eight_neighbours():
     assert grown[0].nonzero().flatten().tolist() == [0, 1, 2, 4, 5, 6, 8, 9, 10]
 
 
+def test_outer_ring_is_the_border_of_the_grid():
+    ring = outer_ring(16)
+    assert ring.view(4, 4).tolist() == [
+        [True, True, True, True], [True, False, False, True], [True, False, False, True], [True, True, True, True],
+    ]
+
+
 def test_top_cell_share_counts_the_top_cells_inside_the_zone():
     scores = torch.tensor([[4.0, 3.0, 2.0, 1.0], [1.0, 2.0, 3.0, 4.0]])
     zone = torch.tensor([[True, False, False, False]] * 2)
@@ -495,6 +503,7 @@ def test_followup_reports_strips_and_all_maps_under_blur(trained_run, tmp_path: 
     assert "Deleted cells are replaced with: blur." in report
     assert "## How common no-data strips are" in report and "## Occlusion without the strip tiles" in report
     assert "## Where the top 20% of cells fall on strip tiles" in report
+    assert "## Edge control: tiles without strips" in report and "## Accuracy on strip tiles and other tiles" in report
     for method in ("cross_attention", "rollout", "grad_cam", "occlusion"):
         assert f"- `{method}`:" in report
     assert "Against the random map, blur: pooled" in report and "Against the random map, blur: test_phili" in report
@@ -511,4 +520,5 @@ def test_followup_separates_strip_tiles_from_the_rest(trained_run, tmp_path: Pat
     assert "- pooled: does not beat random on:" in report  # nothing left to beat it with
     assert "| without strips |" not in report
     assert "| only strips |" in report
+    assert "| strip tiles |" in report and "| other tiles |" not in report
     assert list((tmp_path / "figures" / "run_followup").glob("*_strip_1.png"))

@@ -291,6 +291,14 @@ def cells_in_or_beside(cells: torch.Tensor) -> torch.Tensor:
     return grown.flatten(1).bool()
 
 
+def outer_ring(num_patches: int) -> torch.Tensor:
+    """[N] mask of the grid's outermost cells. Strips lie along edges, so a map that favours
+    edges anyway would seem drawn to strips; this is the control for that."""
+    grid = round(math.sqrt(num_patches))
+    rows, cols = torch.meshgrid(torch.arange(grid), torch.arange(grid), indexing="ij")
+    return ((rows == 0) | (cols == 0) | (rows == grid - 1) | (cols == grid - 1)).flatten()
+
+
 def top_cell_share(scores: torch.Tensor, zone: torch.Tensor, fraction: float) -> torch.Tensor:
     """Per row, the share of the top ``fraction`` of cells that fall inside ``zone``."""
     top = scores.topk(max(1, round(fraction * scores.size(1))), dim=1).indices
@@ -459,6 +467,7 @@ class SplitResult:
     no_data: list[torch.Tensor] = field(default_factory=list)  # [B], no-data cells per question
     zone_share: list[torch.Tensor] = field(default_factory=list)  # [B], share of the tile in or beside no-data cells
     top_in_zone: dict[str, list[torch.Tensor]] = field(default_factory=lambda: defaultdict(list))  # [B]
+    top_on_edge: dict[str, list[torch.Tensor]] = field(default_factory=lambda: defaultdict(list))  # [B]
 
     def has_strip(self) -> torch.Tensor:
         return torch.cat(self.no_data) > 0
@@ -480,13 +489,20 @@ def _is_correct(class_logits: torch.Tensor, count_pred: torch.Tensor, batch: dic
 @torch.no_grad()
 def predict_correct(
     model: nn.Module, dataset: Dataset, indices: list[int], config: dict[str, Any], device: torch.device, desc: str,
+    strips: list[bool] | None = None,
 ) -> list[bool]:
-    """Whether the model answers each question correctly (count: rounded prediction == truth)."""
+    """Whether the model answers each question correctly (count: rounded prediction == truth).
+    If ``strips`` is given, whether each question's tile has a no-data strip is appended to it."""
     correct: list[bool] = []
     for batch in tqdm(_loader(dataset, indices, config), desc=desc, leave=False, unit="batch"):
         batch = prepare_batch(batch, device, dataset)
         outputs = model(batch)
         correct += _is_correct(outputs["class_logits"], outputs["count_pred"], batch)
+        if strips is not None:
+            pixels = batch["image"] * dataset.image_std.to(device).view(3, 1, 1) + dataset.image_mean.to(device).view(3, 1, 1)
+            grid = round(math.sqrt(model.encoder.pos_embed.size(1) - 1))  # pos_embed also holds CLS
+            found = no_data_cells(pixels, grid, config["xai_nodata_pixel_value"], config["xai_nodata_cell_fraction"])
+            strips += found.any(dim=1).tolist()
     return correct
 
 
@@ -535,6 +551,8 @@ def score_split(
         for method, values in maps.items():
             scores = rank_scores(values, generator)
             result.top_in_zone[method].append(top_cell_share(scores, zone, config["xai_top_overlap_fraction"]).cpu())
+            edge = outer_ring(shape[1]).to(device).expand(shape[0], -1)
+            result.top_on_edge[method].append(top_cell_share(scores, edge, config["xai_top_overlap_fraction"]).cpu())
             effects, changed = [], []
             for fraction in fractions:
                 deleted = {**batch, "image": delete_top_patches(batch["image"], scores, fraction, fill)}
@@ -827,16 +845,31 @@ def run_followup(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> 
     splits = [s for s in config["splits"] if s.startswith("test")]
     types = [*config["question_types"], "count"]
     results: dict[str, SplitResult] = {}
+    accuracy_rows = []
     for split in splits:
         dataset = dataloaders[split].dataset
         pool = question_pool(dataset.qa_records, seed)
-        correct = predict_correct(model, dataset, pool, config, device, f"predict {split}")
+        pool_strips: list[bool] = []
+        correct = predict_correct(model, dataset, pool, config, device, f"predict {split}", pool_strips)
+        for qtype in types:
+            for label, keep in (("strip tiles", True), ("other tiles", False)):
+                hits = [c for idx, c, s in zip(pool, correct, pool_strips)
+                        if dataset.qa_records[idx]["type"] == qtype and s == keep]
+                if hits:
+                    accuracy_rows.append(f"| {split} | {qtype} | {label} | {len(hits)} | {sum(hits) / len(hits):.1%} |\n")
         sample = balanced_sample(pool, dataset.qa_records, correct, per_group)
         results[split] = score_split(
             model, dataset, sample, config, device, generator, split, figure_dir, methods,
             extra_figures=config["xai_followup_figures"],
         )
 
+    accuracy_section = (
+        "## Accuracy on strip tiles and other tiles\n\n"
+        "Over one question per tile and type (count: rounded prediction equals the truth), not the sample below, "
+        "and not the full test sets. A difference here does not show that strips cause errors: strip tiles may "
+        "also differ in other ways.\n\n"
+        "| Split | Type | Tiles | Questions | Accuracy |\n|---|---|---|---|---|\n" + "".join(accuracy_rows)
+    )
     groups = {"pooled": results, **{split: {split: results[split]} for split in splits}}
     sections = [
         f"# XAI follow-up: {run_dir.name}" + (" (pilot subsets)" if pilot else "") + "\n\n"
@@ -865,6 +898,7 @@ def run_followup(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> 
         + "".join(strip_rows)
     )
 
+    sections.append(accuracy_section)
     verdicts, occlusion_rows = [], []
     for group, scored in groups.items():
         for label, with_strip in (("all", None), ("without strips", False), ("only strips", True)):
@@ -905,6 +939,21 @@ def run_followup(run_dir: Path, config: dict[str, Any], pilot: bool = False) -> 
         "Share of a map's top cells in or beside no-data cells, against that area's share of the tile.\n\n"
         "| Split | Map | Questions | Top cells in or beside no-data | Share of the tile |\n|---|---|---|---|---|\n"
         + "".join(zone_rows)
+    )
+    edge_rows = []
+    ring_share = outer_ring(model.encoder.pos_embed.size(1) - 1).float().mean().item()
+    for split, result in results.items():
+        others = ~result.has_strip()
+        if others.any():
+            for method in (*methods, CONTROL, BLOCK_CONTROL):
+                share = torch.cat(result.top_on_edge[method])[others].mean().item()
+                edge_rows.append(f"| {split} | {method} | {others.sum().item()} | {share:.1%} | {ring_share:.1%} |\n")
+    sections.append(
+        "## Edge control: tiles without strips\n\n"
+        f"Strips lie along edges. If a map's top {fraction:.0%} of cells favour the outermost ring on tiles without "
+        "strips too, part of the pull towards strips is a pull towards edges.\n\n"
+        "| Split | Map | Questions | Top cells on the outer ring | Share of the tile |\n|---|---|---|---|---|\n"
+        + "".join(edge_rows)
     )
 
     sections.append("## All four maps under blur deletion\n\nThe first three were first tested with mean-colour "
