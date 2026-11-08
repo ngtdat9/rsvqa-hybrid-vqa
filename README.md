@@ -17,7 +17,7 @@ follows.
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
 
-<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="787">
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="790">
 
 <details><summary>Table as text</summary>
 
@@ -32,7 +32,7 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py` | Done: zero-shot CLIP on the complete test sets |
 | `src/explain.py` | Done: five maps with deletion and sanity tests; occlusion confirmed on both test sets and without no-data strips; the first three maps failed |
-| `src/rag/` | Not started (Week 6) |
+| `src/rag/` | In progress: retrieval index done, and it beats random neighbours at flagging errors on every type; LLM explanations next |
 
 </details>
 
@@ -69,7 +69,7 @@ same model, optimizer, schedule, early-stopping and random state.
 Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. The Week 4 full
 run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
 
-**Next:** Week 6 (RAG explanations).
+**Next:** Week 6, part 2 (LLM explanations from the retrieved neighbours).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -567,6 +567,46 @@ Philadelphia strip tile (both chosen by rule):
 <img src="reports/figures/xai/followup_test_presence_yes_1.png" alt="All four maps, test set, correct yes answer to a presence question" width="880">
 <img src="reports/figures/xai/followup_test_phili_strip_1.png" alt="All four maps, Philadelphia tile with a black no-data strip along the top" width="880">
 
+### RAG retrieval (Week 6, part 1)
+
+The first half of the RAG explanation layer: an index of every training QA pair (625,340) stored as the trained
+model's fused image-question vector, the vector both heads read. Nothing is trained. Each tile is encoded once, then
+fused with each of its questions; building the index took 1.8 min on the T4 (320 MB). Report:
+`reports/rag_retrieval_hr_full_20261031-090319.md`.
+
+**Test, fixed before any result:** for one question per test tile and type (13,128), does disagreement between the
+model's answer and its 5 nearest neighbours' true answers flag the model's mistakes better than 5 random same-type
+training questions? Per type, the AUROC difference, both test sets pooled, needs a 95% bootstrap lower bound above 0.
+Only types that pass may use neighbour disagreement as an uncertainty warning in the explanation.
+
+<img src="reports/figures/table_17.png" alt="RAG retrieval (Week 6, part 1): Type, AUROC retrieval, AUROC random, Difference [95% CI], test alone, test_phili alone" width="843">
+
+<details><summary>Table as text</summary>
+
+| Type | AUROC retrieval | AUROC random | Difference [95% CI] | `test` alone | `test_phili` alone |
+|---|---|---|---|---|---|
+| Presence | 0.747 | 0.491 | +0.257 [+0.221, +0.294] | Passes | Passes |
+| Comparison | 0.665 | 0.530 | +0.136 [+0.092, +0.174] | Passes | Fails (+0.053 [−0.007, +0.112]) |
+| Area | 0.790 | 0.632 | +0.158 [+0.130, +0.184] | Passes | Passes |
+| Count | 0.846 | 0.778 | +0.068 [+0.050, +0.087] | Fails (+0.017 [−0.004, +0.039]) | Passes |
+
+</details>
+
+- **Retrieval passes on every type,** so all four may carry the uncertainty warning.
+- **Count's warning is mostly the size of the number.** Random neighbours already reach 0.778: a large count
+  prediction disagrees with almost any neighbours, and large counts are more often wrong. Retrieval adds 0.068 pooled
+  and nothing clear on `test` alone.
+- **Comparison is the weakest type,** and in Philadelphia retrieval is not clearly better than random.
+- **The neighbours mostly confirm the model:** their most common answer equals the model's for 95% of presence and
+  comparison questions, 91% of area and 79% of count, and is about as accurate as the model itself (count MAE 2.19
+  against the model's 2.16). Expected, since the heads read the same vector. So the warning fires on a minority of
+  questions; it is not a second, better model.
+- **Raw similarity is not shown to users.** The nearest neighbours score 0.99 to 1.00 cosine on every type, while
+  random same-type pairs range from 0.31 (count) to 0.93 (comparison), so the scale is compressed and differs by type.
+  58% to 80% of neighbours ask exactly the same question text. Explanations give a neighbour's rank, not its score.
+- **The model gets 72% to 92% of the neighbours right, but they are training data,** so that is inflated by fitting
+  and is not used in explanations as evidence of reliability. Explanations use the neighbours' true answers.
+
 ## Key design decisions
 
 - **Count questions are a regression target**, not a classification bucket.
@@ -696,7 +736,7 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
-<img src="reports/figures/table_17.png" alt="Configuration: Key, Meaning" width="859">
+<img src="reports/figures/table_18.png" alt="Configuration: Key, Meaning" width="859">
 
 <details><summary>Table as text</summary>
 
@@ -735,7 +775,8 @@ src/
 │   ├── hybrid_encoder.py  # CNN stem + Transformer encoder
 │   ├── vqa_head.py        # question encoder, fusion (concat/cross-attention), dual heads, loss
 │   └── clip_baseline.py   # zero-shot CLIP comparison
-├── rag/                   # retrieval + LLM explanation layer (not started)
+├── rag/
+│   └── retrieval_index.py # index of training QA pairs by fused vector, tested against random neighbours
 ├── train.py
 ├── evaluate.py
 └── explain.py             # attention, Grad-CAM and occlusion maps, with faithfulness tests
