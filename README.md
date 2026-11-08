@@ -16,8 +16,9 @@ follows.
 
 **Week 1 (RSVQA-LR pipeline) is complete, trained, and evaluated.**
 **Weeks 2-4 (RSVQA-HR port, tuning, full run) are complete, trained, and evaluated.**
+**Weeks 5-6 (CLIP baseline, explainability, RAG explanations) are complete.**
 
-<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="790">
+<img src="reports/figures/table_01.png" alt="Status: Module, Status" width="770">
 
 <details><summary>Table as text</summary>
 
@@ -32,11 +33,11 @@ follows.
 | `scripts/download_rsvqa_hr.py`, `scripts/inspect_rsvqa.py` | Done — resumable HR download, dataset inspection that suggests config values |
 | `src/models/clip_baseline.py` | Done: zero-shot CLIP on the complete test sets |
 | `src/explain.py` | Done: five maps with deletion and sanity tests; occlusion confirmed on both test sets and without no-data strips; the first three maps failed |
-| `src/rag/` | In progress: retrieval index done, and it beats random neighbours at flagging errors on every type; LLM explanations next |
+| `src/rag/` | Done: retrieval index (beats random neighbours at flagging errors on every type) and checked LLM explanations with a template fallback; the human rating was not run |
 
 </details>
 
-Run `pytest tests/ -v` to verify (80 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
+Run `pytest tests/ -v` to verify (206 tests, all passing — includes HR code paths tested against a small synthetic fake-HR dataset, so they don't require the real 14GB download).
 
 The HR data was downloaded and inspected on 2026-10-22: 10,659 tiles (512×512 PNG), 4 splits with no
 tile overlap, and question types presence / comp / area / count. Area answers turned out to be exact
@@ -69,7 +70,7 @@ same model, optimizer, schedule, early-stopping and random state.
 Week 3 tuning is done (see Week 3 tuning below): small model, learning rate 1.5e-4. The Week 4 full
 run is done too (see HR full run below): 90.2% test accuracy, count MAE 0.91.
 
-**Next:** Week 6, part 2 (LLM explanations from the retrieved neighbours).
+**Next:** Week 7, the demo web app (runs locally on a Mac, with cached explanations for the demo questions).
 
 ### Week 1 baseline results (RSVQA-LR, 5 epochs, GPU)
 
@@ -607,6 +608,64 @@ Only types that pass may use neighbour disagreement as an uncertainty warning in
 - **The model gets 72% to 92% of the neighbours right, but they are training data,** so that is inflated by fitting
   and is not used in explanations as evidence of reliability. Explanations use the neighbours' true answers.
 
+### RAG explanations (Week 6, part 2)
+
+The second half: each answer gets a short text explanation built from the trained model's own evidence. Code writes
+everything that is a plain fact: the answer and its confidence, which grid cells changed the answer most (the
+occlusion map, the one that passed the XAI tests), and a note when the tile has a black no-data strip. A free hosted
+LLM (`openai/gpt-oss-120b` on Groq's free tier) writes one paragraph about the 5 retrieved training neighbours:
+what they asked, their true answers, and a warning when they disagree with the model. Reports:
+`reports/rag_explanations_hr_full_20261031-090319.md` (full run) and `..._pilot.md` (the 24 pilot texts, labelled).
+
+**The LLM paragraph is checked by code before it is shown.** It fails, and a fixed template paragraph is shown
+instead, if it uses a number not in the facts, cites a neighbour other than #1 to #5, mentions the cells or the strip
+(code writes those), says or implies what is in the image, gives reasons or causes for the answer ("based on",
+"relied on", "the model sees"), calls anything correct or wrong, mentions similarity, runs over 90 words, or adds or
+omits the uncertainty note against the rule. The LLM never sees the true answer or whether the model was right.
+On the full run, the LLM paragraph passed for 60 of 64 main questions and 11 of 16 warned ones; 80 requests, 11
+minutes, within the free tier. Three pilot rounds shaped the checks: the first prompt made the LLM invent training
+cases it was not given, blame the warning on the model's confidence, and claim the neighbours caused the answer.
+
+Example (pilot, a warned count question, true answer 71):
+
+> The model answered "4". The model's answer is uncertain because its count of 4 lies outside the range of true
+> answers (6 to 12) seen in similar cases. Among the five most similar training questions, #1 asks "What is the
+> amount of buildings?" with a true answer of 6, and #5 asks the same question with a true answer of 9; none of the
+> similar cases have a true answer of 4. Changing the cells at the top centre and top left of the tile changed the
+> answer most. That tells you what the answer depended on, not where anything is.
+
+**The uncertainty warning, rule fixed before any result:** a yes/no or area answer is warned when fewer than 3 of
+its 5 neighbours have it as their true answer; a count is warned when, rounded, it falls outside the neighbours'
+range of true counts. On one question per test tile and type (13,128), both test sets pooled:
+
+<img src="reports/figures/table_18.png" alt="RAG explanations (Week 6, part 2): Type, Warned, Model wrong when warned, Model wrong otherwise" width="686">
+
+<details><summary>Table as text</summary>
+
+| Type | Warned | Model wrong when warned | Model wrong otherwise |
+|---|---|---|---|
+| Presence | 5.0% | 43.3% | 11.3% |
+| Comparison | 4.5% | 33.6% | 11.4% |
+| Area | 11.5% | 60.9% | 15.1% |
+| Count | 1.1% | 85.7% | 35.2% |
+
+</details>
+
+- **A warned answer is about 3 to 4 times as likely to be wrong** (count about 2.4 times), and this holds in both test
+  sets. Comparison in Philadelphia separates least (29.0% against 19.5%), matching its retrieval result.
+- **Most wrong answers are not warned.** The warning fires on 1% to 12% of questions, so it is a "be careful"
+  signal, not a guarantee when it is silent. Count almost never warns, because the neighbours' range is usually wide.
+- **Unanimous neighbours can back a wrong answer.** When all 5 neighbours share the model's wrong answer, the
+  paragraph makes that answer sound well supported (pilot examples: test-6822, test_phili-17143, test_phili-12048).
+- **Whether the explanations help people was not measured.** A blind rating was designed and generated (80 pairs,
+  identical except for the neighbour paragraph, decision rule fixed in advance: Wilson 95% lower bound of the share
+  preferring the version with neighbours above 0.5), but it was not carried out. So no claim is made that RAG makes
+  the explanations better for readers; the claims rest on the retrieval test and the warning statistics above. The
+  sheet and its scoring (`python -m src.rag.explain_agent <run_dir> configs/hr_config.yaml score --ratings <file>`)
+  remain available.
+- **Some derived statements are not checked.** The checks cover numbers, neighbour ranks and banned claims, not
+  arithmetic the LLM does on the facts (for example "none of the similar cases has a true answer of 4").
+
 ## Key design decisions
 
 - **Count questions are a regression target**, not a classification bucket.
@@ -647,6 +706,10 @@ Only types that pass may use neighbour disagreement as an uncertainty warning in
   (`raw_dir`, `split_file_prefix`, `images_subdir`, `image_ext`) recorded at
   build time — reusing a `data_dir` for a different raw dataset raises
   instead of silently serving stale artifacts built from the wrong data.
+- **Explanations: code states the facts, the LLM only summarises the neighbours.** The answer, the cells and the
+  strip note are written by code in every explanation; the LLM writes one paragraph about the retrieved neighbours,
+  and code checks it before it is shown, falling back to a template. The API key is read from an environment
+  variable (`GROQ_API_KEY`), never stored in the repo.
 - **Cross-attention fusion** (default) has question words attend directly
   over image patch tokens, with retrievable per-word attention weights
   (`return_attention=True`) — the planned hook for Week 5's explainability
@@ -736,7 +799,7 @@ To train on a GPU instead:
 All hyperparameters live in `configs/model_config.yaml` (LR) /
 `configs/hr_config.yaml` (HR):
 
-<img src="reports/figures/table_18.png" alt="Configuration: Key, Meaning" width="859">
+<img src="reports/figures/table_19.png" alt="Configuration: Key, Meaning" width="859">
 
 <details><summary>Table as text</summary>
 
@@ -759,6 +822,9 @@ All hyperparameters live in `configs/model_config.yaml` (LR) /
 | `mixed_precision` | float16 math on CUDA via autocast + gradient scaling; ignored on CPU/MPS |
 | `selection_metric` | What `best.pt` and early stopping maximize: `score` = val accuracy + (1 − val count MAE / median-baseline MAE), or `val_loss` |
 | `experiments_dir`, `experiment_name` | Where runs are logged/checkpointed |
+| `rag_k`, `rag_*_batch_size`, `rag_search_chunk_rows`, `rag_bootstrap_samples` | RAG retrieval: neighbours per question, encoding and search batch sizes, bootstrap samples for the retrieval test |
+| `rag_llm_*` | RAG explanations: OpenAI-compatible endpoint, model, the environment variable holding the API key, request pacing and retries |
+| `rag_max_words`, `rag_top_cells`, `rag_warning_min_agree`, `rag_banned_phrases` | Explanation rules: paragraph length, cells named, the warning rule, phrases that send a paragraph back to the template |
 
 </details>
 
@@ -776,7 +842,8 @@ src/
 │   ├── vqa_head.py        # question encoder, fusion (concat/cross-attention), dual heads, loss
 │   └── clip_baseline.py   # zero-shot CLIP comparison
 ├── rag/
-│   └── retrieval_index.py # index of training QA pairs by fused vector, tested against random neighbours
+│   ├── retrieval_index.py # index of training QA pairs by fused vector, tested against random neighbours
+│   └── explain_agent.py   # explanations: code-written facts + checked LLM neighbour paragraph, warning stats
 ├── train.py
 ├── evaluate.py
 └── explain.py             # attention, Grad-CAM and occlusion maps, with faithfulness tests
