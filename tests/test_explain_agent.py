@@ -23,7 +23,8 @@ from src.rag.explain_agent import (
     PoolResult,
     run_generate,
     score_ratings,
-    template_body,
+    fixed_sentences,
+    neighbour_template,
     top_zones,
     warning,
     wilson_interval,
@@ -82,23 +83,19 @@ def test_warning_rules():
     assert warning(1.4, counts, True, 3)        # rounds to 1
 
 
-def test_facts_text_hides_the_truth_and_drops_neighbours_without_retrieval():
-    facts = make_facts(truth="no", correct=False)
-    with_n, without = facts_text(facts, True), facts_text(facts, False)
-    assert '#1 "Is there a road?" true answer: yes' in with_n and "4 of 5" in with_n
-    assert "#1" not in without and "Uncertain" not in without
-    # a "no" line is left out: the pilot LLM echoed it back as filler ("there is no no-data strip")
-    assert "Uncertain" not in with_n and "strip" not in with_n
-    flagged = make_facts(warning=True, agree=1, strip=True)
-    assert "Uncertain: yes" in facts_text(flagged, True) and "Uncertain" not in facts_text(flagged, False)
-    assert "Uncertain: yes, because only 1 of the 5 similar cases" in facts_text(flagged, True)
-    assert "outside the similar cases' range" in facts_text(count_facts(warning=True), True)
-    assert "true counts: all 0" in facts_text(count_facts(count_range=(0.0, 0.0)), True)
-    assert all("no-data strip on this tile: yes" in facts_text(flagged, w) for w in (True, False))
-    for text in (with_n, without):
-        assert "correct" not in text.lower() and 'answer: "no"' not in text
-    assert "range from 2 to 9" in facts_text(count_facts(), True)
-    assert "all had a true count of 0" in template_body(count_facts(count_range=(0.0, 0.0)), True)
+def test_facts_text_hides_the_truth_and_leaves_the_cells_and_strip_to_code():
+    facts = make_facts(truth="no", correct=False, strip=True)
+    text = facts_text(facts)
+    assert '#1 "Is there a road?" true answer: yes' in text and "4 of 5" in text
+    assert "correct" not in text.lower() and 'answer: "no"' not in text
+    assert "top left" not in text and "strip" not in text
+    # a "no" line is left out: the pilot LLM echoed it back as filler
+    assert "Uncertain" not in text
+    assert "Uncertain: yes, because only 1 of the 5 similar cases" in facts_text(make_facts(warning=True, agree=1))
+    assert "outside the similar cases' range" in facts_text(count_facts(warning=True))
+    assert "range from 2 to 9" in facts_text(count_facts())
+    assert "true counts: all 0" in facts_text(count_facts(count_range=(0.0, 0.0)))
+    assert "all had a true count of 0" in neighbour_template(count_facts(count_range=(0.0, 0.0)))
     assert first_sentence(make_facts()) == 'The model answered "yes" with 93% confidence.'
     assert first_sentence(count_facts()) == 'The model answered "7".'
 
@@ -107,9 +104,8 @@ def test_facts_text_hides_the_truth_and_drops_neighbours_without_retrieval():
     make_facts(), make_facts(warning=True, agree=1), make_facts(strip=True), count_facts(), count_facts(warning=True),
     make_facts(answer="11 to 100 square meters", qtype="area", strip=True, warning=True, agree=2),
 ])
-@pytest.mark.parametrize("with_neighbours", [True, False])
-def test_the_template_passes_every_check(facts, with_neighbours):
-    assert check_explanation(template_body(facts, with_neighbours), facts, config(), with_neighbours) == []
+def test_the_neighbour_template_passes_every_check(facts):
+    assert check_explanation(neighbour_template(facts), facts, config()) == []
 
 
 @pytest.mark.parametrize("body, reason", [
@@ -132,32 +128,26 @@ def test_the_template_passes_every_check(facts, with_neighbours):
     ("The answer is uncertain because the model's confidence is only 51%.", "banned phrasing"),
     ("The answer is marked as uncertain because the model indicated uncertainty.", "banned phrasing"),
     ("This answer is uncertain.", "uncertainty note not called for"),
-    ("The tile has a no-data strip.", "no-data note not called for"),
+    ("The tile has a no-data strip.", "mentions the cells or the strip"),
+    ("#1 agrees, and the top left cells mattered most.", "mentions the cells or the strip"),
     ("word " * 91, "too long"),
     ("", "empty"),
 ])
 def test_checks_catch_each_rule(body, reason):
-    failures = check_explanation(body, make_facts(), config(), True)
+    failures = check_explanation(body, make_facts(), config())
     assert any(f.startswith(reason) for f in failures), failures
 
 
-def test_checks_require_the_warning_and_strip_notes_when_called_for():
-    facts = make_facts(warning=True, agree=1, strip=True)
-    failures = check_explanation("Most of #1 to #5 disagree.", facts, config(), True)
-    assert "uncertainty note missing" in failures and "no-data note missing" in failures
-    # without neighbours there is no warning to require, and mentioning uncertainty is allowed
-    assert check_explanation("Changing the top left changed it most. The no-data strip says nothing about what is there; "
-                             "the answer may be uncertain.", facts, config(), False) == []
+def test_checks_require_the_uncertainty_note_when_warned():
+    facts = make_facts(warning=True, agree=1)
+    assert "uncertainty note missing" in check_explanation("Most of #1 to #5 disagree.", facts, config())
+    assert check_explanation("Only 1 of the 5 similar cases agrees, so the answer is uncertain.", facts, config()) == []
 
 
-def test_each_condition_gets_its_own_prompt():
-    facts = make_facts()
-    with_n = ea.build_messages(facts, config(), True)[0]["content"]
-    without = ea.build_messages(facts, config(), False)[0]["content"]
-    assert "#1 to #5" in with_n and "uncertain" in with_n
-    # mentioning ranked cases made the pilot LLM invent them when none were given
-    assert "#1" not in without and "uncertain" not in without.lower()
-    assert "no training cases" in without
+def test_the_prompt_is_only_about_the_neighbours():
+    system, user = (m["content"] for m in ea.build_messages(make_facts(strip=True), config()))
+    assert "#1 to #5" in system and "uncertain" in system and "Do not mention grid cells" in system
+    assert "#5" in user and "top left" not in user and "strip" not in user
 
 
 class FakeClient:
@@ -170,27 +160,32 @@ class FakeClient:
         return self.replies.pop(0), 42
 
 
-def test_explain_shows_a_passing_llm_text_after_the_code_written_answer():
+def test_the_two_conditions_differ_only_by_the_neighbour_paragraph():
+    facts = make_facts(strip=True)
     client = FakeClient(["Four of the five closest training cases, #1 to #5, had this answer."])
-    result = explain(make_facts(), client, config(), True)
-    assert result["source"] == "llm" and result["tokens"] == 42
-    assert result["text"] == 'The model answered "yes" with 93% confidence. Four of the five closest training cases, #1 to #5, had this answer.'
-    prompt = client.messages[0][1]["content"]
-    assert "Facts:" in prompt and "#5" in prompt and "true answer: yes" in prompt
+    with_n = explain(facts, client, config(), True)
+    without = explain(facts, client, config(), False)
+    assert len(client.messages) == 1  # no LLM call without neighbours
+    assert with_n["source"] == "llm" and with_n["tokens"] == 42 and without["source"] == "code"
+    answer, fixed = first_sentence(facts), fixed_sentences(facts)
+    assert without["text"] == f"{answer} {fixed}"
+    assert with_n["text"] == f"{answer} Four of the five closest training cases, #1 to #5, had this answer. {fixed}"
+    assert "no-data strip" in fixed and "top left and centre" in fixed
 
 
 def test_explain_falls_back_to_the_template_on_a_failed_check_or_request():
-    failed = explain(make_facts(), FakeClient(["The heatmap highlights the road."]), config(), True)
+    facts = make_facts()
+    failed = explain(facts, FakeClient(["The heatmap highlights the road."]), config(), True)
     assert failed["source"] == "template" and failed["failures"]
-    assert failed["text"].endswith(template_body(make_facts(), True))
+    assert failed["text"] == f"{first_sentence(facts)} {neighbour_template(facts)} {fixed_sentences(facts)}"
 
     class Broken:
         def complete(self, messages):
             raise RuntimeError("LLM request failed: HTTP 401")
 
-    broken = explain(make_facts(), Broken(), config(), True)
+    broken = explain(facts, Broken(), config(), True)
     assert broken["source"] == "template" and broken["failures"] == ["LLM request failed: HTTP 401"]
-    assert explain(make_facts(), None, config(), True)["source"] == "template"
+    assert explain(facts, None, config(), True)["source"] == "template"
 
 
 class _Response(io.BytesIO):
@@ -262,10 +257,10 @@ def test_rating_sheet_is_blind_and_scoring_unblinds_it(tmp_path: Path):
     items = []
     for i in range(36):
         facts = make_facts(row=i, warning=i >= 30)
-        without_source = "llm" if i < 20 or i >= 30 else "template"  # 20 main pairs both LLM, 10 against the template
+        with_source = "llm" if i < 20 or i >= 30 else "template"  # 20 main paragraphs by the LLM, 10 by the template
         items.append({"id": f"test-{i}", "set": "warned" if i >= 30 else "main", "facts": vars(facts) | {"neighbours": []},
-                      "with_neighbours": {"text": f"WITH {i}", "source": "llm"},
-                      "without_neighbours": {"text": f"WITHOUT {i}", "source": without_source}})
+                      "with_neighbours": {"text": f"WITH {i}", "source": with_source},
+                      "without_neighbours": {"text": f"WITHOUT {i}", "source": "code"}})
     sheet, key = tmp_path / "sheet.csv", tmp_path / "key.json"
     write_rating_sheet(items, 0, sheet, key)
     rows = list(csv.DictReader(sheet.open()))
@@ -287,18 +282,19 @@ def test_rating_sheet_is_blind_and_scoring_unblinds_it(tmp_path: Path):
     main, warned = report.split("## Warned set")
     assert "**Result: retrieval improves the explanations.**" in main
     assert "## Main set (30 questions)" in main
-    assert "| both LLM | 19 | 19 (100%) |" in main and main.split("| both LLM | 19 | 19 (100%) |")[1].split("\n")[0].endswith("| 1 |")
-    assert "| with: LLM, without: template | 10 | 10 (100%) |" in main and "| all | 29 | 29 (100%) |" in main
-    assert "| both LLM | with neighbours | 3.00 (n=20) | 3.00 (n=20) |" in main
+    by_llm = "| neighbours by LLM | 19 | 19 (100%) |"
+    assert by_llm in main and main.split(by_llm)[1].split("\n")[0].endswith("| 1 |")
+    assert "| neighbours by template | 10 | 10 (100%) |" in main and "| all | 29 | 29 (100%) |" in main
+    assert "| neighbours by LLM | with neighbours | 3.00 (n=20) | 3.00 (n=20) |" in main
     assert "| all | without neighbours | 1.00 (n=30) | 2.00 (n=30) |" in main
-    assert warned.startswith(" (6 questions; does not decide)") and "| both LLM | 6 | 6 (100%) |" in warned
+    assert warned.startswith(" (6 questions; does not decide)") and "| neighbours by LLM | 6 | 6 (100%) |" in warned
 
-    # preferences on LLM-against-template pairs, or on the warned set, never decide
+    # preferences on the warned set alone never decide
     for row in rows:
-        if number(row) < 20:
+        if number(row) < 30:
             row["prefer"] = ""
     write_rows(sheet, rows)
-    assert "**No preferences given yet on pairs where both texts are the LLM's.**" in score_ratings(sheet, key)
+    assert "**No preferences given yet on the main set.**" in score_ratings(sheet, key)
 
 
 def test_warned_set_takes_warned_questions_per_type_outside_the_main_set():
@@ -317,16 +313,19 @@ def test_generate_runs_end_to_end_with_a_fake_llm(trained_run, tmp_path: Path):
 
     class Echo:
         def complete(self, messages):
-            return "Changing those cells changed the answer most.", 10
+            return "Most of the similar cases have this answer as their true answer.", 10
 
     report = run_generate(run_dir, settings, client=Echo(), out_dir=tmp_path / "reports")
     assert "## Uncertainty warning on the test pool" in report and "| pooled | presence |" in report
-    assert "| with neighbours |" in report and "## Explanations" in report
+    assert "| main |" in report and "## Explanations" in report
     assert "Left out so the rating stays blind" in report and "True answer:" not in report
     items = json.loads((run_dir / "rag_explanations_full.json").read_text())
     assert items and all(item["facts"]["neighbours"] for item in items)
     assert {item["facts"]["split"] for item in items} == {"test", "test_phili"}
-    assert "- Warned set:" in report and "| main | **both texts LLM** |" in report
+    assert "- Warned set:" in report and "| warned |" in report
+    for item in items:  # the two texts differ only by the neighbour paragraph
+        assert item["without_neighbours"]["source"] == "code"
+        assert item["with_neighbours"]["text"].endswith(item["without_neighbours"]["text"].split(". ", 1)[1])
     for item in items:  # warned-set questions are warned and never repeat a main-set question
         assert item["set"] == "main" or item["facts"]["warning"]
     assert len({item["id"] for item in items}) == len(items)

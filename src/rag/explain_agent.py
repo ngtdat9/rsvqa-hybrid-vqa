@@ -118,32 +118,29 @@ def _number(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 
-def facts_text(facts: Facts, with_neighbours: bool) -> str:
-    """The facts block the LLM sees. The truth and whether the model is right are left out. The warning and
-    the strip are stated only when they apply: the pilot showed a "no" line gets repeated back as filler."""
+def facts_text(facts: Facts) -> str:
+    """The facts block the LLM sees: the question, the model's answer and the neighbours. The truth and
+    whether the model is right are left out; the grid cells and the strip are not given, since code writes
+    those sentences. The warning is stated only when it applies (the pilot LLM echoed a "no" line back)."""
     lines = [f"Question: {facts.question}", f"Question type: {facts.qtype}"]
     if facts.confidence is None:
         lines.append(f'Model\'s answer: "{facts.answer}" (a count; the model gives no confidence for counts)')
     else:
         lines.append(f'Model\'s answer: "{facts.answer}" (confidence {facts.confidence:.0%})')
-    lines.append(f"Grid cells whose change moved the answer most: {', '.join(facts.zones)}")
-    if with_neighbours:
-        k = len(facts.neighbours)
-        lines.append(f"The {k} most similar training questions, by the model's own representation, with their true answers:")
-        lines += [f'#{n.rank} "{n.question}" true answer: {n.answer}' for n in facts.neighbours]
-        if facts.count_range is None:
-            lines.append(f"Similar cases whose true answer is the model's answer: {facts.agree} of {k}")
-        else:
-            low, high = facts.count_range
-            lines.append(f"Similar cases' true counts: all {_number(low)}" if low == high
-                         else f"Similar cases' true counts range from {_number(low)} to {_number(high)}")
-        if facts.warning:
-            # the reason is stated: without it the pilot LLM blamed the model's confidence
-            reason = ("the model's count is outside the similar cases' range of true counts" if facts.count_range
-                      else f"only {facts.agree} of the {k} similar cases have the model's answer as their true answer")
-            lines.append(f"Uncertain: yes, because {reason}")
-    if facts.strip:
-        lines.append("Black no-data strip on this tile: yes")
+    k = len(facts.neighbours)
+    lines.append(f"The {k} most similar training questions, by the model's own representation, with their true answers:")
+    lines += [f'#{n.rank} "{n.question}" true answer: {n.answer}' for n in facts.neighbours]
+    if facts.count_range is None:
+        lines.append(f"Similar cases whose true answer is the model's answer: {facts.agree} of {k}")
+    else:
+        low, high = facts.count_range
+        lines.append(f"Similar cases' true counts: all {_number(low)}" if low == high
+                     else f"Similar cases' true counts range from {_number(low)} to {_number(high)}")
+    if facts.warning:
+        # the reason is stated: without it the pilot LLM blamed the model's confidence
+        reason = ("the model's count is outside the similar cases' range of true counts" if facts.count_range
+                  else f"only {facts.agree} of the {k} similar cases have the model's answer as their true answer")
+        lines.append(f"Uncertain: yes, because {reason}")
     return "\n".join(lines)
 
 
@@ -154,22 +151,17 @@ def first_sentence(facts: Facts) -> str:
     return f'The model answered "{facts.answer}" with {facts.confidence:.0%} confidence.'
 
 
-PROMPT_START = """You explain one answer of an aerial-image question-answering model to a non-expert.
-The first sentence, stating the model's answer, is already written. Write only what follows it.
+SYSTEM_PROMPT = """You write one short paragraph for an explanation of an aerial-image question-answering
+model's answer, read by a non-expert. Code has already written the model's answer and which parts of the image
+mattered. Your paragraph is only about the similar training cases.
 
 Rules:
-- Use only the facts given. You have not seen the image: never guess what is in it, what the grid cells
-  contain, or what features, cues or patterns the model used, learned or believes.
-- Do not explain why the model answered as it did. Report the facts; do not add reasons.
-- 1 to 3 sentences, at most {max_words} words, plain English. Short is fine when there is little to say.
+- Use only the facts given. You have not seen the image: never guess what is in it, or what the model used,
+  learned or believes. Do not explain why the model answered as it did.
+- 1 to 3 sentences, at most {max_words} words, plain English.
 - Do not state the answer again as your own claim, and do not say whether it is correct.
 - Only use numbers that appear in the facts.
-- The grid cells are where changing the image changed the answer most. Never say they show, contain,
-  highlight or locate anything.
-- If the facts mention a black no-data strip, say the tile has a "no-data strip" and that strong cells
-  near it say nothing about what is there. If they do not mention one, never mention a strip or missing data."""
-
-PROMPT_WITH_NEIGHBOURS = """
+- Do not mention grid cells, image regions or a no-data strip; code covers those.
 - The similar training cases were found after the model answered, by comparing its internal representation.
   They did not cause, support or influence the answer: never say the answer is based on, supported by,
   driven by or explained by them. You may say how many of them have the model's answer as their true answer.
@@ -181,73 +173,67 @@ PROMPT_WITH_NEIGHBOURS = """
   the reason the facts state. The reason is the similar cases, never the model's confidence.
   Otherwise never use the word "uncertain"."""
 
-PROMPT_WITHOUT_NEIGHBOURS = """
-- You are given no training cases or examples. Never mention any, and never write "#" followed by a number."""
 
-
-def system_prompt(config: dict[str, Any], with_neighbours: bool) -> str:
-    rules = PROMPT_WITH_NEIGHBOURS if with_neighbours else PROMPT_WITHOUT_NEIGHBOURS
-    return PROMPT_START.format(max_words=config["rag_max_words"]) + rules
-
-
-def build_messages(facts: Facts, config: dict[str, Any], with_neighbours: bool) -> list[dict[str, str]]:
+def build_messages(facts: Facts, config: dict[str, Any]) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": system_prompt(config, with_neighbours)},
-        {"role": "user", "content": f"Facts:\n{facts_text(facts, with_neighbours)}\n\n"
-                                    f"Already written: {first_sentence(facts)}\nContinue:"},
+        {"role": "system", "content": SYSTEM_PROMPT.format(max_words=config["rag_max_words"])},
+        {"role": "user", "content": f"Facts:\n{facts_text(facts)}\n\nWrite the paragraph about the similar cases:"},
     ]
 
 
 NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
 
-def check_explanation(body: str, facts: Facts, config: dict[str, Any], with_neighbours: bool) -> list[str]:
-    """Every rule the LLM's text breaks; empty means it may be shown."""
+def check_explanation(body: str, facts: Facts, config: dict[str, Any]) -> list[str]:
+    """Every rule the LLM's neighbour paragraph breaks; empty means it may be shown."""
     failures = []
     lower = body.lower()
     if not body.strip():
         return ["empty"]
     if len(body.split()) > config["rag_max_words"]:
         failures.append("too long")
-    allowed = set(NUMBER.findall(facts_text(facts, with_neighbours))) | {str(i) for i in range(len(facts.neighbours) + 1)}
+    allowed = set(NUMBER.findall(facts_text(facts))) | {str(i) for i in range(len(facts.neighbours) + 1)}
     unknown = sorted(set(NUMBER.findall(body)) - allowed)
     if unknown:
         failures.append(f"numbers not in the facts: {', '.join(unknown)}")
     cited = {int(n) for n in re.findall(r"#(\d+)", body)}
-    if cited and (not with_neighbours or not cited <= set(range(1, len(facts.neighbours) + 1))):
+    if not cited <= set(range(1, len(facts.neighbours) + 1)):
         failures.append("cites a neighbour that was not given")
     banned = [p for p in config["rag_banned_phrases"] if re.search(p, lower)]
     if banned:
         failures.append(f"banned phrasing: {', '.join(banned)}")
-    if with_neighbours and ("uncertain" in lower) != facts.warning:
+    if ("uncertain" in lower) != facts.warning:
         failures.append("uncertainty note " + ("missing" if facts.warning else "not called for"))
-    if ("no-data" in lower or "strip" in lower) != facts.strip:
-        failures.append("no-data note " + ("missing" if facts.strip else "not called for"))
+    if re.search(r"no-data|no.data|\bstrip\b|\bcells?\b", lower):
+        failures.append("mentions the cells or the strip, which code writes")
     return failures
 
 
-def template_body(facts: Facts, with_neighbours: bool) -> str:
-    """The fallback text: fixed sentences built from the facts alone."""
-    sentences = []
-    if with_neighbours:
-        k = len(facts.neighbours)
-        if facts.count_range is None:
-            sentences.append(f"Of the {k} training questions the model treats as most similar, {facts.agree} "
-                             f"had this answer as their true answer (#1 is the closest).")
-            if facts.warning:
-                sentences.append("Because most of them disagree, treat this answer as uncertain.")
-        else:
-            low, high = facts.count_range
-            spread = (f"all had a true count of {_number(low)}" if low == high
-                      else f"had true counts from {_number(low)} to {_number(high)}")
-            sentences.append(f"The {k} training questions the model treats as most similar {spread}.")
-            if facts.warning:
-                sentences.append("This count falls outside that range, so treat it as uncertain.")
+def fixed_sentences(facts: Facts) -> str:
+    """Written by code in both conditions: which cells mattered, and the strip note."""
     zones = facts.zones[0] if len(facts.zones) == 1 else f"{', '.join(facts.zones[:-1])} and {facts.zones[-1]}"
-    sentences.append(f"Changing the cells at the {zones} of the tile changed the answer most. "
-                     "That tells you what the answer depended on, not where anything is.")
+    sentences = [f"Changing the cells at the {zones} of the tile changed the answer most. "
+                 "That tells you what the answer depended on, not where anything is."]
     if facts.strip:
         sentences.append("The tile has a black no-data strip; strong cells next to it say nothing about what is there.")
+    return " ".join(sentences)
+
+
+def neighbour_template(facts: Facts) -> str:
+    """The fallback neighbour paragraph: fixed sentences built from the facts alone."""
+    k = len(facts.neighbours)
+    if facts.count_range is None:
+        sentences = [f"Of the {k} training questions the model treats as most similar, {facts.agree} "
+                     f"had this answer as their true answer (#1 is the closest)."]
+        if facts.warning:
+            sentences.append("Because most of them disagree, treat this answer as uncertain.")
+    else:
+        low, high = facts.count_range
+        spread = (f"all had a true count of {_number(low)}" if low == high
+                  else f"had true counts from {_number(low)} to {_number(high)}")
+        sentences = [f"The {k} training questions the model treats as most similar {spread}."]
+        if facts.warning:
+            sentences.append("This count falls outside that range, so treat it as uncertain.")
     return " ".join(sentences)
 
 
@@ -309,21 +295,27 @@ class OpenAICompatibleClient:
 
 
 def explain(facts: Facts, client: LLMClient | None, config: dict[str, Any], with_neighbours: bool) -> dict[str, Any]:
-    """The explanation shown to users, and where it came from: 'llm', or 'template' after a failed
-    check or a failed request (or with no client at all)."""
+    """The explanation shown to users. Code writes the answer, the cells and the strip note in both
+    conditions; with neighbours, a paragraph about them goes after the answer. So the two conditions
+    differ only by that paragraph. ``source`` says who wrote it: 'llm', or 'template' after a failed
+    check or request (or with no client); 'code' when there is none."""
     failures: list[str] = []
     tokens = 0
     body = ""
-    if client is not None:
-        try:
-            body, tokens = client.complete(build_messages(facts, config, with_neighbours))
-            failures = check_explanation(body, facts, config, with_neighbours)
-        except RuntimeError as error:
-            failures = [str(error)]
-    source = "llm" if client is not None and not failures else "template"
-    shown = body if source == "llm" else template_body(facts, with_neighbours)
-    return {"text": f"{first_sentence(facts)} {shown}", "source": source, "failures": failures,
-            "llm_text": body, "tokens": tokens}
+    source = "code"
+    parts = [first_sentence(facts)]
+    if with_neighbours:
+        if client is not None:
+            try:
+                body, tokens = client.complete(build_messages(facts, config))
+                body = body.strip()
+                failures = check_explanation(body, facts, config)
+            except RuntimeError as error:
+                failures = [str(error)]
+        source = "llm" if client is not None and not failures else "template"
+        parts.append(body if source == "llm" else neighbour_template(facts))
+    parts.append(fixed_sentences(facts))
+    return {"text": " ".join(parts), "source": source, "failures": failures, "llm_text": body, "tokens": tokens}
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +506,7 @@ def _preference_line(label: str, wins: dict[str, int], same: int) -> str:
             f"| {low:.0%} to {high:.0%} | {same} |")
 
 
-PAIR_GROUPS = ("both LLM", "with: LLM, without: template", "with: template, without: LLM", "both template")
+PAIR_GROUPS = ("neighbours by LLM", "neighbours by template")
 
 
 def _tally(rows: list[tuple[dict[str, str], dict[str, Any]]]) -> tuple[dict, dict, dict, int]:
@@ -525,10 +517,8 @@ def _tally(rows: list[tuple[dict[str, str], dict[str, Any]]]) -> tuple[dict, dic
     same = {g: 0 for g in groups}
     unrated = 0
     for row, entry in rows:
-        conditions, sources = entry["order"], entry["sources"]
-        with_llm, without_llm = (sources[c] == "llm" for c in CONDITIONS)
-        group = PAIR_GROUPS[0] if with_llm and without_llm else PAIR_GROUPS[1] if with_llm else \
-            PAIR_GROUPS[2] if without_llm else PAIR_GROUPS[3]
+        conditions = entry["order"]
+        group = PAIR_GROUPS[0] if entry["sources"]["with_neighbours"] == "llm" else PAIR_GROUPS[1]
         for g in (group, "all"):
             for slot, condition in zip(("1", "2"), conditions):
                 for measure in ("useful", "honest"):
@@ -562,32 +552,31 @@ def _tables(scores: dict, wins: dict, same: dict) -> list[str]:
     lines += [_preference_line(g, wins[g], same[g]) for g in (*PAIR_GROUPS, "all")]
     lines += ["", "| Pairs | Condition | Useful (1-3) | Honest about uncertainty (1-3) |", "|---|---|---|---|"]
     lines += [f"| {g} | {c.replace('_', ' ')} | {mean(scores[g][c]['useful'])} | {mean(scores[g][c]['honest'])} |"
-              for g in ("both LLM", "all") for c in CONDITIONS]
+              for g in (*PAIR_GROUPS, "all") for c in CONDITIONS]
     return lines
 
 
 def score_ratings(sheet: Path, key: Path) -> str:
     """Unblinds a filled-in sheet. ``prefer`` is 1, 2 or 'same'; scores are 1 (poor) to 3 (good).
 
-    Only main-set pairs where both texts are the LLM's decide: a pair of LLM text against the template
-    compares writers, not retrieval. The warned set is reported on its own and decides nothing."""
+    The two texts of a pair are identical apart from the neighbour paragraph, so every main-set pair decides;
+    pairs are also shown by who wrote that paragraph. The warned set is reported on its own and decides nothing."""
     key_data = json.loads(key.read_text())
     with sheet.open(newline="") as f:
         rated = [(row, key_data[row["id"]]) for row in csv.DictReader(f)]
     by_set = {name: [(r, e) for r, e in rated if e.get("set", "main") == name] for name in RATING_SETS}
     scores, wins, same, unrated = _tally(by_set["main"])
-    deciding = wins["both LLM"]
+    deciding = wins["all"]
     decided = deciding["with_neighbours"] + deciding["without_neighbours"]
     low, _ = wilson_interval(deciding["with_neighbours"], decided)
     improves = decided > 0 and low > 0.5
     lines = [
         "# Blind rating of RAG explanations\n",
-        "**Rule, fixed before rating:** among main-set pairs where both texts are written by the LLM and a "
-        "preference is given, retrieval improves the explanations if the share preferring the one with "
-        "neighbours has a 95% Wilson lower bound above 0.5. Pairs involving the template compare writers, "
-        "not retrieval, and do not decide.\n",
+        "**Rule, fixed before rating:** the two texts of a pair are identical except that one has a paragraph "
+        "about the neighbours. Among main-set pairs with a preference, retrieval improves the explanations if "
+        "the share preferring the one with neighbours has a 95% Wilson lower bound above 0.5.\n",
         (f"**Result: {'retrieval improves the explanations' if improves else 'no clear improvement from retrieval'}.**\n"
-         if decided else "**No preferences given yet on pairs where both texts are the LLM's.**\n"),
+         if decided else "**No preferences given yet on the main set.**\n"),
         f"## Main set ({len(by_set['main'])} questions)\n",
         f"Not rated: {unrated}.\n",
         *_tables(scores, wins, same),
@@ -689,20 +678,18 @@ def generate_report(
         + warning_table(pools, types),
     ]
     lines = ["## Checks\n",
-             "Only main-set pairs where both texts are the LLM's decide the rating, so that count matters most.\n",
-             "| Set | Condition | LLM text shown | Fell back to the template | Tokens |", "|---|---|---|---|---|"]
+             "Code writes the answer, the cells and the strip note in both texts; the LLM writes only the "
+             "neighbour paragraph, which falls back to a template when a check fails.\n",
+             "| Set | Neighbour paragraph by the LLM | Fell back to the template | Tokens |", "|---|---|---|---|"]
     reasons: dict[str, int] = defaultdict(int)
     for set_name in RATING_SETS:
-        for condition in CONDITIONS:
-            results = [item[condition] for item in in_set[set_name]]
-            shown = sum(r["source"] == "llm" for r in results)
-            for r in results:
-                for failure in r["failures"]:
-                    reasons[f"{condition.replace('_', ' ')}: {failure.split(':')[0]}"] += 1
-            lines.append(f"| {set_name} | {condition.replace('_', ' ')} | {shown} of {len(results)} "
-                         f"| {len(results) - shown} | {sum(r['tokens'] for r in results):,} |")
-        both = sum(all(i[c]["source"] == "llm" for c in CONDITIONS) for i in in_set[set_name])
-        lines.append(f"| {set_name} | **both texts LLM** | {both} of {len(in_set[set_name])} | | |")
+        results = [item["with_neighbours"] for item in in_set[set_name]]
+        shown = sum(r["source"] == "llm" for r in results)
+        for r in results:
+            for failure in r["failures"]:
+                reasons[failure.split(":")[0]] += 1
+        lines.append(f"| {set_name} | {shown} of {len(results)} | {len(results) - shown} "
+                     f"| {sum(r['tokens'] for r in results):,} |")
     if reasons:
         lines += ["", "Why texts fell back:", ""] + [f"- {reason}: {n}" for reason, n in sorted(reasons.items())]
     sections.append("\n".join(lines) + "\n")
