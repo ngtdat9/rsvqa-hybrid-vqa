@@ -329,9 +329,12 @@ def _grid(model: nn.Module) -> int:
 
 
 def build_facts(
-    model: nn.Module, dataset: Any, split: str, row: int, index: RetrievalIndex, train: Any,
-    train_truths: np.ndarray, config: dict[str, Any], device: torch.device,
+    model: nn.Module, dataset: Any, split: str, row: int, prediction: float, neighbour_rows: list[int],
+    train: Any, train_truths: np.ndarray, config: dict[str, Any], device: torch.device,
 ) -> Facts:
+    """The facts for one question. The answer and neighbours come from the pool that chose the question:
+    re-encoding it alone can reorder near-tied neighbours (similarities are 0.99-1.00, stored in float16),
+    and the facts must match the warning the question was picked by."""
     from src.explain import no_data_cells, occlusion_map
 
     record = dataset.qa_records[row]
@@ -342,18 +345,12 @@ def build_facts(
         outputs = model(batch)
         scores = occlusion_map(model, batch, outputs["class_logits"], outputs["count_pred"], grid * grid)[0]
     probabilities = outputs["class_logits"].softmax(-1)[0]
-    predicted_class = int(probabilities.argmax())
-    prediction = float(outputs["count_pred"][0]) if is_count else float(predicted_class)
-
-    features = empty_features(1, model.classifier.in_features)
-    compute_features(model, dataset, [row], features, config, device, "facts")
-    _, rows = index.search(features.vectors, record["type"], config["rag_k"], device)
-    neighbour_rows = rows[0]
-    truths = train_truths[neighbour_rows]
+    predicted_class = -1 if is_count else int(prediction)
+    truths = train_truths[np.asarray(neighbour_rows)]
     neighbours = [
         Neighbour(rank=i + 1, img_id=int(train.qa_records[r]["img_id"]), question=train.qa_records[r]["question"],
                   answer=readable(train.qa_records[r]["answer"], is_count))
-        for i, r in enumerate(neighbour_rows.tolist())
+        for i, r in enumerate(neighbour_rows)
     ]
     pixels = batch["image"] * dataset.image_std.to(device).view(3, 1, 1) + dataset.image_mean.to(device).view(3, 1, 1)
     strip = bool(no_data_cells(pixels, grid, config["xai_nodata_pixel_value"], config["xai_nodata_cell_fraction"]).any())
@@ -381,6 +378,8 @@ class PoolResult:
     types: list[str] = field(default_factory=list)
     correct: list[bool] = field(default_factory=list)
     warned: list[bool] = field(default_factory=list)
+    prediction: list[float] = field(default_factory=list)  # class index, or the raw count
+    neighbours: list[list[int]] = field(default_factory=list)  # training rows, closest first
 
 
 def score_pool(
@@ -406,6 +405,8 @@ def score_pool(
             result.types.append(qtype)
             result.correct.append(round(prediction) == truth if is_count else prediction == truth)
             result.warned.append(warning(prediction, train_truths[neighbours[i]], is_count, config["rag_warning_min_agree"]))
+            result.prediction.append(prediction)
+            result.neighbours.append([int(r) for r in neighbours[i]])
     return result
 
 
@@ -431,7 +432,7 @@ def warning_table(results: dict[str, PoolResult], types: list[str]) -> str:
 def _pool(parts: list[PoolResult]) -> PoolResult:
     pooled = PoolResult()
     for part in parts:
-        for name in ("rows", "types", "correct", "warned"):
+        for name in ("rows", "types", "correct", "warned", "prediction", "neighbours"):
             getattr(pooled, name).extend(getattr(part, name))
     return pooled
 
@@ -638,8 +639,11 @@ def run_generate(
         main = rating_rows(pools[split], per_group)
         chosen = [(row, "main") for row in main] + [
             (row, "warned") for row in warned_rows(pools[split], warned_per_type, set(main))]
+        position = {row: j for j, row in enumerate(pools[split].rows)}
         for row, rating_set in chosen:
-            facts = build_facts(model, dataset, split, row, index, train, train_truths, config, device)
+            j = position[row]
+            facts = build_facts(model, dataset, split, row, pools[split].prediction[j], pools[split].neighbours[j],
+                                train, train_truths, config, device)
             llm_started = llm_started or time.monotonic()
             item = {"id": f"{split}-{row}", "set": rating_set, "facts": asdict(facts)}
             for condition in CONDITIONS:
