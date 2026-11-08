@@ -1,6 +1,6 @@
 # Explainable Visual Question Answering on Aerial Images
 
-**NGO THANH DAT** · Advanced Computer Vision + Big Data course project
+**NGO THANH DAT**
 
 Ask a question about an aerial photo ("Is there a road on the right of a park?", "How many buildings are there?")
 and get an answer, a map of what the answer depended on, and a short explanation grounded in similar training
