@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RSVQA Hybrid VQA: Progress Report, Weeks 1-6</title>
+<style>
+  :root {
+    --ink: #1f2328; --muted: #59636e; --rule: #d8dee4; --soft: #f5f7f9;
+    --blue: #0072B2; --sky: #e8f3fa; --orange: #E69F00; --red: #D55E00; --green: #009E73;
+  }
+  @page { size: A4; margin: 18mm 17mm 18mm 17mm;
+    @bottom-right { content: counter(page); font: 8.5pt Helvetica, Arial, sans-serif; color: #59636e; }
+    @bottom-left { content: "RSVQA Hybrid VQA · Progress report, Weeks 1–6"; font: 8.5pt Helvetica, Arial, sans-serif; color: #8c959f; }
+  }
+  @page :first { @bottom-right { content: none; } @bottom-left { content: none; } }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font: 10pt/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif; color: var(--ink); margin: 0; background: #fff; }
+  h1, h2, h3 { line-height: 1.2; margin: 0; }
+  h2 { font-size: 17pt; margin: 0 0 4pt; letter-spacing: -0.2pt; }
+  h2 .week { display: block; font-size: 8.5pt; font-weight: 600; text-transform: uppercase; letter-spacing: 1pt; color: var(--blue); margin-bottom: 3pt; }
+  h3 { font-size: 11.5pt; margin: 14pt 0 4pt; }
+  p { margin: 0 0 7pt; }
+  .lead { font-size: 10.5pt; color: var(--muted); margin-bottom: 10pt; }
+  section { break-before: page; }
+  .avoid { break-inside: avoid; }
+  ul { margin: 0 0 8pt; padding-left: 15pt; }
+  li { margin-bottom: 3pt; }
+  code { font: 8.8pt Menlo, monospace; background: var(--soft); padding: 0.5pt 3pt; border-radius: 3px; }
+  figure { margin: 8pt 0 12pt; break-inside: avoid; }
+  figure img { width: 100%; display: block; }
+  figcaption { font-size: 8.5pt; color: var(--muted); margin-top: 4pt; }
+  table { border-collapse: collapse; width: 100%; font-size: 8.6pt; margin: 6pt 0 10pt; break-inside: avoid; }
+  th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1.2pt solid #8c959f; padding: 4pt 6pt; }
+  td { border-bottom: 0.6pt solid var(--rule); padding: 3.5pt 6pt; vertical-align: top; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.hl td { background: var(--sky); font-weight: 600; }
+  .box { border-left: 3pt solid var(--blue); background: var(--sky); padding: 7pt 10pt; margin: 8pt 0 10pt; break-inside: avoid; }
+  .box.warn { border-color: var(--orange); background: #fdf5e6; }
+  .box.bad { border-color: var(--red); background: #fbece5; }
+  .box > b:first-child { display: block; margin-bottom: 2pt; }
+  figure.narrow img { width: 72%; margin: 0 auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10pt; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8pt; margin: 10pt 0 12pt; }
+  .kpi { border: 0.8pt solid var(--rule); border-radius: 6px; padding: 8pt 9pt; break-inside: avoid; }
+  .kpi .v { font-size: 19pt; font-weight: 700; color: var(--blue); letter-spacing: -0.5pt; }
+  .kpi .l { font-size: 8.3pt; color: var(--muted); line-height: 1.35; }
+  .quote { font-size: 9.3pt; background: var(--soft); border-radius: 6px; padding: 9pt 11pt; margin: 6pt 0 10pt; break-inside: avoid; }
+  .quote .code { color: var(--muted); }
+  .quote .llm { background: #fff3cd; padding: 0 2pt; }
+  .tag { display: inline-block; font-size: 7.5pt; font-weight: 600; padding: 1pt 5pt; border-radius: 8px; margin-right: 3pt; }
+  .tag.ok { background: #dcf3ea; color: #0b6b4f; } .tag.no { background: #fbe1d6; color: #9a3a0b; } .tag.mid { background: #fdf0d2; color: #7a5300; }
+
+  /* cover */
+  .cover { height: 255mm; display: flex; flex-direction: column; }
+  .cover .band { background: linear-gradient(135deg, #0b3d5c, #0072B2); color: #fff; border-radius: 10px; padding: 26pt 24pt 22pt; }
+  .cover .eyebrow { font-size: 9pt; letter-spacing: 1.5pt; text-transform: uppercase; opacity: 0.85; }
+  .cover h1 { font-size: 30pt; margin: 8pt 0 8pt; letter-spacing: -0.6pt; }
+  .cover .sub { font-size: 12pt; opacity: 0.92; max-width: 140mm; }
+  .cover .meta { margin-top: 14pt; font-size: 9pt; opacity: 0.85; }
+  .cover .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; margin-top: 14pt; }
+  .cover .tiles img { width: 100%; border-radius: 6px; border: 0.6pt solid var(--rule); }
+  .toc { margin-top: auto; columns: 2; font-size: 9.5pt; }
+  .toc div { break-inside: avoid; padding: 2pt 0; border-bottom: 0.5pt dotted var(--rule); }
+  .toc span { color: var(--blue); font-weight: 600; display: inline-block; width: 18pt; }
+
+  /* timeline */
+  .timeline { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5pt; margin: 8pt 0 12pt; }
+  .tl { border-top: 3pt solid var(--blue); padding-top: 5pt; font-size: 8.3pt; line-height: 1.35; break-inside: avoid; }
+  .tl b { display: block; font-size: 9pt; }
+  .tl .d { color: var(--muted); font-size: 7.8pt; }
+  svg text { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<div class="cover">
+  <div class="band">
+    <div class="eyebrow">Advanced Computer Vision + Big Data · Course project · Progress report</div>
+    <h1>Explainable Visual Question Answering on Aerial Images</h1>
+    <div class="sub">A hybrid CNN-Transformer model on RSVQA-HR, compared against zero-shot CLIP, with tested explanation maps and a retrieval-based (RAG) explanation layer. Weeks 1 to 6.</div>
+    <div class="meta"><b style="font-size:11pt;letter-spacing:.5pt">NGO THANH DAT</b><br>8 November 2026 · Code: github.com/ngtdat9/rsvqa-hybrid-vqa · Run reported: <code style="background:rgba(255,255,255,.15);color:#fff">hr_full_20261031-090319</code></div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v">90.2%</div><div class="l">test accuracy (yes/no, comparison, area); count error 0.91 objects</div></div>
+    <div class="kpi"><div class="v">76.9%</div><div class="l">on Philadelphia, a city never seen in training</div></div>
+    <div class="kpi"><div class="v">+40.8</div><div class="l">points above zero-shot CLIP on the test set</div></div>
+    <div class="kpi"><div class="v">3–4×</div><div class="l">more likely wrong when the RAG warning fires</div></div>
+  </div>
+
+  <div class="tiles">
+    <figure style="margin:0"><img src="FIG/xai/occlusion_test_presence_right.png"><figcaption>An answer and its occlusion map: the cells whose change moved the answer most.</figcaption></figure>
+    <figure style="margin:0"><img src="FIG/xai/occlusion_test_phili_count_wrong.png"><figcaption>Philadelphia tile with a black no-data strip: the strongest cells sit at the strip.</figcaption></figure>
+  </div>
+
+  <div class="toc">
+    <div><span>1</span>Summary</div>
+    <div><span>2</span>Timeline, Weeks 1–6</div>
+    <div><span>3</span>The data</div>
+    <div><span>4</span>The model</div>
+    <div><span>5</span>Weeks 1–2: proof of concept on RSVQA-LR</div>
+    <div><span>6</span>Weeks 2–3: moving to HR, and tuning</div>
+    <div><span>7</span>Week 4: the full training run</div>
+    <div><span>8</span>Week 5: comparison with CLIP</div>
+    <div><span>9</span>Week 5: explaining the answers (XAI)</div>
+    <div><span>10</span>Week 6: RAG explanations</div>
+    <div><span>11</span>Limitations, and what comes next</div>
+    <div><span>A</span>Appendix: settings, files, how to run</div>
+  </div>
+</div>
+
+<!-- ============================== 1 SUMMARY ============================== -->
+<section>
+  <h2><span class="week">1 · Summary</span>What was built, and what it shows</h2>
+  <p class="lead">The project answers questions about aerial images (“Is there a road on the right of a park?”, “How many buildings are there?”) and explains each answer. It was built in four steps, each tested against a rule fixed before its results came in.</p>
+
+  <table>
+    <tr><th>Part</th><th>What it does</th><th>Main result</th></tr>
+    <tr><td><b>Hybrid model</b></td><td>A small CNN turns the 512×512 tile into patches, a Transformer relates them, and the question’s words attend over them. Two heads: one picks an answer, one predicts a count.</td><td>90.2% accuracy and a count error of 0.91 on the test set; 76.9% and 4.90 on Philadelphia.</td></tr>
+    <tr><td><b>CLIP baseline</b></td><td>A large general image-text model used with no training on this data.</td><td>Below even “always give the most common answer”. Our model leads by 40.8 points (test) and 21.9 (Philadelphia).</td></tr>
+    <tr><td><b>Explanation maps (XAI)</b></td><td>Five ways to show which parts of the image an answer depended on, each tested by blanking those parts and rerunning the model.</td><td>Only <b>occlusion</b> passed every test, on both test sets. Attention maps and Grad-CAM failed.</td></tr>
+    <tr><td><b>RAG explanations</b></td><td>For each answer, find the 5 most similar training questions, show their true answers, and warn when they disagree. An LLM writes that part; code checks it.</td><td>The neighbours flag wrong answers better than random ones on every question type. A warned answer is 3–4× as likely to be wrong.</td></tr>
+  </table>
+
+  <div class="box"><b>The three findings worth remembering</b>
+  <ul style="margin:0">
+    <li><b>It works well where it was trained, and much less well in a new city.</b> Accuracy falls 13 points in Philadelphia, mostly on area questions (86.1% → 64.8%); counts there barely beat always guessing the median.</li>
+    <li><b>Most explanation maps don’t survive testing.</b> Attention looks convincing but changes the answer no more than random cells; only occlusion is faithful. Even occlusion shows what the model depended on, not where an object is.</li>
+    <li><b>Retrieval gives a useful, honest warning, but a partial one.</b> When it fires, take it seriously. It fires on 1–12% of questions, so most wrong answers are not warned.</li>
+  </ul></div>
+
+  <div class="box warn"><b>What this report does not claim</b>
+  That the architecture beats a CLIP model fine-tuned on this data (only zero-shot CLIP was tested); that the maps point at the right object (the dataset has no object outlines); or that the RAG explanations help people (a blind rating was designed but not carried out).</div>
+
+  <h3>How the work was done</h3>
+  <ul>
+    <li><b>Rules before results.</b> Every comparison (which checkpoint, which map, whether retrieval helps, when to warn) was fixed before its numbers were seen, so results could not be chosen to fit.</li>
+    <li><b>No leakage.</b> Splits are by image tile, and every statistic (vocabularies, image mean and spread) is fitted on the training split only.</li>
+    <li><b>Built for size, cheap to run.</b> Data is streamed and each tile decoded once; 206 automated tests, all passing. Training ran on one Colab T4 GPU; the LLM is a free hosted API, called 80 times in total.</li>
+  </ul>
+</section>
+
+<!-- ============================== 2 TIMELINE ============================== -->
+<section>
+  <h2><span class="week">2 · Timeline</span>Weeks 1 to 6</h2>
+  <p class="lead">From a small proof of concept to the full dataset, then two layers of explanation.</p>
+  <div class="timeline">
+    <div class="tl"><b>Week 1</b><span class="d">to 14 Oct</span><br>Pipeline and baseline on the small LR dataset: 73.2% accuracy. Count head barely learns.</div>
+    <div class="tl"><b>Week 2</b><span class="d">to 24 Oct</span><br>Count loss fixed, cross-attention added (78.3% val). HR downloaded and inspected; first HR pilot: 82.7%.</div>
+    <div class="tl"><b>Week 3</b><span class="d">to 30 Oct</span><br>Stable training (seed, schedule, selection score). Tuning: a larger model diverges; the small one is kept.</div>
+    <div class="tl"><b>Week 4</b><span class="d">31 Oct</span><br>Full run on all 6,251 training tiles, 14.4 h: 90.2% test, 76.9% Philadelphia.</div>
+    <div class="tl"><b>Week 5</b><span class="d">to 6 Nov</span><br>CLIP baseline. Five explanation maps tested; occlusion is the only one confirmed.</div>
+    <div class="tl"><b>Week 6</b><span class="d">to 8 Nov</span><br>RAG: retrieval index tested against random; checked LLM explanations and an uncertainty warning.</div>
+  </div>
+
+  <h3>Accuracy at each milestone</h3>
+  <p>The numbers are not all measured on the same questions, so read this as a history, not a league table.</p>
+  <table>
+    <tr><th>Milestone</th><th>Data</th><th>Measured on</th><th class="n">Accuracy</th><th class="n">Count error (MAE)</th></tr>
+    <tr><td>Week 1 baseline</td><td>LR (256×256, 772 tiles)</td><td>LR test</td><td class="n">73.2%</td><td class="n">193.6</td></tr>
+    <tr><td>Week 2 re-run</td><td>LR</td><td>LR validation</td><td class="n">78.3%</td><td class="n">167.5</td></tr>
+    <tr><td>HR pilot, run 1</td><td>HR, 1,500 training tiles</td><td>300-tile test subset</td><td class="n">82.7%</td><td class="n">1.50</td></tr>
+    <tr><td>HR pilot, run 3 (stable setup)</td><td>HR, 1,500 tiles</td><td>300-tile test subset</td><td class="n">88.5%</td><td class="n">1.14</td></tr>
+    <tr><td>Tuned pilot</td><td>HR, 1,500 tiles</td><td>complete test set</td><td class="n">88.5%</td><td class="n">1.11</td></tr>
+    <tr class="hl"><td>Full run</td><td>HR, all 6,251 tiles</td><td>complete test set</td><td class="n">90.2%</td><td class="n">0.91</td></tr>
+    <tr class="hl"><td>Full run, Philadelphia</td><td>HR, all 6,251 tiles</td><td>complete test_phili</td><td class="n">76.9%</td><td class="n">4.90</td></tr>
+  </table>
+  <p style="font-size:8.8pt;color:var(--muted)">LR counts run into the thousands (median 6, maximum 16,640), so its count errors are not comparable with HR’s, where counts are 0–56 on the main test set.</p>
+</section>
+
+<!-- ============================== 3 DATA ============================== -->
+<section>
+  <h2><span class="week">3 · The data</span>RSVQA: questions about aerial tiles</h2>
+  <p class="lead">RSVQA pairs aerial image tiles with automatically generated questions and answers, built from OpenStreetMap. Two versions were used.</p>
+
+  <table>
+    <tr><th></th><th>RSVQA-LR (proof of concept)</th><th>RSVQA-HR (main dataset)</th></tr>
+    <tr><td>Imagery</td><td>Sentinel-2, 256×256 tiles, 10 m per pixel</td><td>Aerial photos, 512×512 tiles, 15 cm per pixel</td></tr>
+    <tr><td>Tiles</td><td class="n" style="text-align:left">772</td><td>10,659</td></tr>
+    <tr><td>Questions</td><td>77,232</td><td>over 1 million</td></tr>
+    <tr><td>Question types</td><td>presence, comparison, rural/urban, count</td><td>presence, comparison, area, count</td></tr>
+    <tr><td>Splits (tiles)</td><td>572 train · 100 val · 100 test</td><td>6,251 train · 1,126 val · 2,226 test · 1,056 test_phili</td></tr>
+  </table>
+
+  <h3>The four HR question types</h3>
+  <table>
+    <tr><th>Type</th><th>Example</th><th>Answer</th><th>Handled as</th></tr>
+    <tr><td>Presence</td><td>Is a small commercial building present?</td><td>yes / no</td><td>classification</td></tr>
+    <tr><td>Comparison</td><td>Are there more buildings than water areas?</td><td>yes / no</td><td>classification</td></tr>
+    <tr><td>Area</td><td>What is the area covered by residential buildings?</td><td>exact m², e.g. 1234m2</td><td>classification into 5 ranges: 0, 1–10, 11–100, 101–1000, over 1000 m²</td></tr>
+    <tr><td>Count</td><td>How many medium buildings are there?</td><td>a number</td><td>regression: a separate head predicts the number</td></tr>
+  </table>
+
+  <h3>Decisions about the data</h3>
+  <ul>
+    <li><b>Two test sets.</b> <code>test</code> comes from the same region as training. <code>test_phili</code> is Philadelphia, a city the model never sees: it measures whether the model generalises.</li>
+    <li><b>Area as ranges, count as a number.</b> Area answers are exact square metres, so they were grouped into 5 ranges, giving 7 possible answers in total (yes, no and the 5 ranges). Counts stay numbers: treating 7 and 8 as unrelated classes would throw away their order.</li>
+    <li><b>Splits by tile.</b> All questions about one tile stay in one split. Otherwise the model could be tested on a tile it trained on.</li>
+    <li><b>Training-only statistics.</b> The word vocabulary, the answer list and the image normalisation are fitted on training tiles only.</li>
+    <li><b>Streaming.</b> The full dataset does not fit in memory; tiles are read when needed and decoded once into a cache file (about 0.8 MB per tile on disk), so each of a tile’s ~100 questions does not decode it again.</li>
+  </ul>
+  <div class="box warn"><b>A data quirk found later: no-data strips</b>Some tiles, mostly in Philadelphia, have black strips where no imagery exists (33% of sampled Philadelphia questions, against 2% on <code>test</code>). They matter for the explanation maps (section 9) but do not explain the Philadelphia drop: accuracy on strip tiles is not consistently lower.</div>
+</section>
+
+<!-- ============================== 4 MODEL ============================== -->
+<section>
+  <h2><span class="week">4 · The model</span>A hybrid CNN-Transformer with two heads</h2>
+  <p class="lead">A CNN is good at local texture (roofs, roads, trees); a Transformer is good at relations across the image (“on the right of”). The model uses both, then lets each word of the question look at the image.</p>
+
+  <figure>
+  <img src="DIAG/architecture.svg" style="width:100%">
+  </figure>
+
+  <h3>Why these choices</h3>
+  <ul>
+    <li><b>Cross-attention fusion.</b> The first version squeezed the image into one summary vector and joined it with the question. Letting each question word attend over the 256 image patches works better (section 5) and gives an attention map to test later. The original version is kept as an option for comparison.</li>
+    <li><b>Two heads, one backbone.</b> Counting is a different job from choosing an answer, so it gets its own output. Both heads read the same fused vector, which keeps the model small.</li>
+    <li><b>Count trained on log(1 + count).</b> Raw counts made the count loss millions of times larger than the answer loss, drowning it (section 5).</li>
+    <li><b>Small on purpose.</b> A model with 3.7× the parameters was tried in Week 3 and could not be trained stably (section 6).</li>
+    <li><b>Everything in one config file.</b> Image size, model sizes, answer list and training settings live in <code>configs/hr_config.yaml</code>; moving from LR to HR was a config change, not a rewrite.</li>
+  </ul>
+
+  <h3>Training setup (final)</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Learning rate</td><td>peak 1.5e-4, warm-up then cosine decay to 0</td><td>tuned in Week 3; a constant rate made validation swing</td></tr>
+    <tr><td>Epochs</td><td>10, no early stopping</td><td>early stopping reacted to noise in the pilot</td></tr>
+    <tr><td>Best checkpoint chosen by</td><td>a score: accuracy + how much count error beats the median guess</td><td>loss alone picked a worse epoch</td></tr>
+    <tr><td>Precision</td><td>mixed (float16 on the GPU)</td><td>epochs ~40% faster</td></tr>
+    <tr><td>Batch size, seed</td><td>32, fixed seed</td><td>runs repeatable</td></tr>
+  </table>
+</section>
+
+<!-- ============================== 5 LR ============================== -->
+<section>
+  <h2><span class="week">5 · Weeks 1–2</span>Proof of concept on RSVQA-LR</h2>
+  <p class="lead">The whole pipeline (loading, training, evaluation) was built and tested on the small LR dataset first, where a run takes minutes.</p>
+
+  <div class="grid2">
+    <div>
+      <h3 style="margin-top:0">Week 1 baseline (LR test, 5 epochs)</h3>
+      <table>
+        <tr><th>Metric</th><th class="n">Value</th></tr>
+        <tr><td>Accuracy, overall</td><td class="n">73.2%</td></tr>
+        <tr><td>— presence</td><td class="n">84.8%</td></tr>
+        <tr><td>— comparison</td><td class="n">65.0%</td></tr>
+        <tr><td>— rural / urban</td><td class="n">56.0%</td></tr>
+        <tr><td>Count MAE</td><td class="n">193.6</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3 style="margin-top:0">Week 2 re-run (LR validation, best epoch)</h3>
+      <table>
+        <tr><th>Metric</th><th class="n">Week 1</th><th class="n">Week 2</th></tr>
+        <tr><td>Combined loss</td><td class="n">~750,000</td><td class="n"><b>1.52</b></td></tr>
+        <tr><td>Accuracy</td><td class="n">74.2%</td><td class="n"><b>78.3%</b></td></tr>
+        <tr><td>Count MAE</td><td class="n">192.4</td><td class="n"><b>167.5</b></td></tr>
+        <tr><td>Count MAE, always the median</td><td class="n">—</td><td class="n">205.5</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="box bad"><b>Problem found in Week 1: the count head was not learning</b>Accuracy rose every epoch (55.5% → 75.7%) while count error stayed flat. Raw LR counts reach the thousands, so the count loss was hundreds of thousands of times larger than the answer loss and dominated training. It was a scaling problem, not a lack of capacity.</div>
+  <div class="box"><b>Fix in Week 2</b>The count head now learns log(1 + count), which brings the loss to a sensible scale (1.52), and cross-attention fusion replaced the single image vector. Accuracy rose 4 points and count error now beats always guessing the median by about 18%. Counts were still weak in absolute terms, but LR counts are extremely skewed; HR counts (0–56) make this matter far less.</div>
+</section>
+
+<!-- ============================== 6 HR PILOT + TUNING ============================== -->
+<section>
+  <h2><span class="week">6 · Weeks 2–3</span>Moving to HR, and tuning</h2>
+  <p class="lead">HR has 14 times the tiles at 4 times the pixels. Pilot runs on 1,500 training tiles were used to fix speed and stability before any tuning.</p>
+
+  <h3>Making it fast enough</h3>
+  <p>The first pilot took about an hour per epoch: every question decoded its 512×512 image again on Colab’s 2 CPU cores. Decoding each tile once into a cache, and normalising images on the GPU, took loading from 67 to 726 images per second; mixed precision then brought pilot epochs from ~38 to ~22 minutes.</p>
+
+  <h3>Making it stable before tuning</h3>
+  <p>Two identical pilot runs differed by 4–6 points, and validation swung between epochs (88% → 79% → 88% → 69%). A difference that size would swamp any tuning result. The fixes: a fixed seed, a warm-up and cosine learning-rate schedule, a checkpoint score that counts both accuracy and count error, and no early stopping. After that, three seeds of the same setting landed within 0.1 points of each other (89.1–89.2% validation).</p>
+  <table>
+    <tr><th>Pilot run (300-tile test subsets)</th><th class="n">test accuracy</th><th class="n">test count MAE</th><th class="n">test_phili accuracy</th></tr>
+    <tr><td>Run 1 (first setup)</td><td class="n">82.7%</td><td class="n">1.50</td><td class="n">76.8%</td></tr>
+    <tr><td>Run 2 (same settings, different luck)</td><td class="n">87.0%</td><td class="n">1.28</td><td class="n">83.3%</td></tr>
+    <tr><td>Run 3 (stable setup)</td><td class="n">88.5%</td><td class="n">1.14</td><td class="n">81.3%</td></tr>
+  </table>
+
+  <h3>Tuning (validation only)</h3>
+  <table>
+    <tr><th>Run</th><th>Change</th><th class="n">Best val accuracy</th><th class="n">Val count MAE</th><th>Outcome</th></tr>
+    <tr><td>baseline</td><td>peak LR 3e-4</td><td class="n">89.7%</td><td class="n">1.04</td><td>reference</td></tr>
+    <tr><td><code>tune_lr1e-3</code></td><td>LR 1e-3</td><td class="n">81.6%</td><td class="n">1.69</td><td><span class="tag no">worse</span> unstable</td></tr>
+    <tr class="hl"><td><code>tune_lr1.5e-4</code></td><td>LR 1.5e-4</td><td class="n">89.2%</td><td class="n">1.02</td><td><span class="tag ok">kept</span> best pre-set score</td></tr>
+    <tr><td><code>tune_wide</code></td><td>wider model (3.3M params)</td><td class="n">85.8%</td><td class="n">1.47</td><td><span class="tag no">collapsed</span> after epoch 3</td></tr>
+    <tr><td><code>tune_wide_clip</code></td><td>same + gradient clipping</td><td class="n">85.6%</td><td class="n">1.36</td><td><span class="tag no">collapsed</span> at epoch 3</td></tr>
+  </table>
+
+  <div class="grid2" style="align-items:start">
+    <figure style="margin-top:0"><img src="CH/grad_norms.svg"><figcaption>Gradient size during training. The wide model’s grew 20-fold and peaked near 12,000, so clipping capped almost every step without fixing the cause.</figcaption></figure>
+    <div>
+      <p><b>Why the wide model failed.</b> It led the small model for its first 2–3 epochs (85.6% vs 80.8% at epoch 2), then validation collapsed to 39–51%. A diagnostic script ruled out the two usual suspects: the CNN’s normalisation statistics and float16 overflow. Something inside the larger Transformer diverges.</p>
+      <p><b>Decision: keep the small model.</b> A known fix (a “pre-norm” Transformer) is an architecture change needing its own tuning round, so it is left as future work.</p>
+      <p><b>Learning rate:</b> 3e-4 has ~0.5 points more accuracy, 1.5e-4 a lower count error. 1.5e-4 was kept because the selection score was fixed before tuning.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 7 FULL RUN ============================== -->
+<section>
+  <h2><span class="week">7 · Week 4</span>The full training run</h2>
+  <p class="lead">The tuned setting on all 6,251 training tiles: 10 epochs, ~86 minutes each, 14.4 hours on a Colab T4.</p>
+
+  <figure><img src="CH/training_curves.svg"><figcaption>Validation improved almost every epoch and the best epoch was the last. Train and validation loss stayed close (0.325 / 0.348 at the end): no sign of over-fitting. The dashed line is the count error of always guessing the training median.</figcaption></figure>
+
+  <h3>Results on the complete test sets</h3>
+  <div class="grid2" style="align-items:start">
+    <figure style="margin-top:0"><img src="CH/test_vs_phili.svg"><figcaption>Accuracy per question type. The gap is largest on area questions.</figcaption></figure>
+    <table style="margin-top:0">
+      <tr><th>Metric</th><th class="n">test</th><th class="n">test_phili</th></tr>
+      <tr><td>Accuracy, overall</td><td class="n">90.2%</td><td class="n">76.9%</td></tr>
+      <tr><td>Count MAE (median guess)</td><td class="n">0.91 (2.16)</td><td class="n">4.90 (5.25)</td></tr>
+      <tr><td>Count RMSE (median guess)</td><td class="n">2.34 (5.42)</td><td class="n">13.58 (14.10)</td></tr>
+      <tr><td>Test tiles</td><td class="n">2,226</td><td class="n">1,056</td></tr>
+    </table>
+  </div>
+
+  <h3>Did 4× more training data help?</h3>
+  <table>
+    <tr><th>Metric</th><th class="n">test, pilot (1,500 tiles)</th><th class="n">test, full (6,251)</th><th class="n">test_phili, pilot</th><th class="n">test_phili, full</th></tr>
+    <tr><td>Accuracy, overall</td><td class="n">88.5%</td><td class="n"><b>90.2%</b></td><td class="n">77.6%</td><td class="n">76.9%</td></tr>
+    <tr><td>Accuracy, area</td><td class="n">84.4%</td><td class="n"><b>86.1%</b></td><td class="n">67.5%</td><td class="n">64.8%</td></tr>
+    <tr><td>Count MAE</td><td class="n">1.11</td><td class="n"><b>0.91</b></td><td class="n">4.81</td><td class="n">4.90</td></tr>
+  </table>
+  <div class="box"><b>More data helped in the familiar region, not in the new city</b>On <code>test</code>, accuracy rose 1.8 points and count error fell by 0.20. On Philadelphia nothing improved. The ~13-point gap and counts that barely beat the median there are the main generalisation result: the model learned the training region’s look, not a transferable sense of buildings and areas. (One seed each, so the small Philadelphia decline is read as “no gain”, not as proven harm.)</div>
+</section>
+
+<!-- ============================== 8 CLIP ============================== -->
+<section>
+  <h2><span class="week">8 · Week 5</span>Comparison with zero-shot CLIP</h2>
+  <p class="lead">CLIP (<code>clip-vit-large-patch14</code>) matches images with text. With no training on RSVQA, it scores one sentence per possible answer (“Is a road present? yes”) against the tile and takes the best. The sentence template was chosen on validation; each test set was scored once.</p>
+
+  <figure><img src="CH/clip_comparison.svg"><figcaption>Accuracy by question type. “Most common answer” always gives the training set’s most frequent answer for that type.</figcaption></figure>
+
+  <table>
+    <tr><th>Metric</th><th class="n">test: ours</th><th class="n">CLIP</th><th class="n">trivial</th><th class="n">test_phili: ours</th><th class="n">CLIP</th><th class="n">trivial</th></tr>
+    <tr><td>Accuracy, overall</td><td class="n"><b>90.2%</b></td><td class="n">49.5%</td><td class="n">63.7%</td><td class="n"><b>76.9%</b></td><td class="n">55.0%</td><td class="n">61.5%</td></tr>
+    <tr><td>Count MAE</td><td class="n"><b>0.91</b></td><td class="n">14.13</td><td class="n">2.16</td><td class="n"><b>4.90</b></td><td class="n">11.33</td><td class="n">5.25</td></tr>
+  </table>
+
+  <ul>
+    <li><b>Zero-shot CLIP is below the trivial guess on every type, in both test sets.</b> Our model leads it by 40.8 points on <code>test</code> and 21.9 on Philadelphia.</li>
+    <li><b>This is a low bar.</b> It shows a model trained for the task beats an untrained general one. It does not show our architecture beats a CLIP model fine-tuned on RSVQA, which was not tested.</li>
+    <li><b>Not like for like.</b> CLIP sees the tile at 224×224 (about 34 cm per pixel against our 15 cm), which hurts it; it only chooses among answers valid for the question type, which helps it.</li>
+    <li><b>Unexplained:</b> CLIP does 5.5 points better on Philadelphia than on <code>test</code>, while our model drops 13.4.</li>
+  </ul>
+</section>
+
+<!-- ============================== 9 XAI ============================== -->
+<section>
+  <h2><span class="week">9 · Week 5</span>Explaining the answers: which maps can be trusted?</h2>
+  <p class="lead">A heatmap over the image is the usual way to “explain” a vision model. But a map can look plausible and still not reflect what the model used. So every map was tested before being shown.</p>
+
+  <h3>The test</h3>
+  <div class="box"><b>Deletion test, rule fixed before any result</b>Blank the cells a map ranks highest and rerun the model. If the map is faithful, the answer should change more than when blanking the same number of random cells. A map qualifies only if it beats random on <b>every</b> question type and passes two sanity checks: it must change when the model’s weights are randomised (correlation below 0.5), and it must differ between two questions about the same tile (correlation below 0.9). Among qualifying maps, the one with the largest effect is chosen. Sample: up to 250 right and 250 wrong answers per type and test set (3,829 questions).</div>
+
+  <h3>Five maps, one survivor</h3>
+  <table>
+    <tr><th>Map</th><th>What it is</th><th>Result</th></tr>
+    <tr><td>Cross-attention</td><td>where the question’s words attend</td><td><span class="tag no">fails</span> no better than random on any type</td></tr>
+    <tr><td>Attention rollout</td><td>attention traced back through the encoder</td><td><span class="tag no">fails</span> beats random, but is nearly the same map for different questions (0.967); ties random in Philadelphia</td></tr>
+    <tr><td>Grad-CAM</td><td>gradients at the last CNN stage</td><td><span class="tag no">fails</span> beats random on count only; blank on 314 of 3,829</td></tr>
+    <tr><td>Gradient-weighted attention</td><td>attention weighted by its gradient (Chefer et al., 2021)</td><td><span class="tag mid">qualifies</span> but a much smaller effect</td></tr>
+    <tr class="hl"><td>Occlusion</td><td>grey out each of the 256 cells in turn, measure how much the answer changes</td><td><span class="tag ok">chosen</span> chosen on validation, then confirmed on both test sets</td></tr>
+  </table>
+
+  <figure><img src="CH/occlusion_deletion.svg"><figcaption>How much the answer changes when the occlusion map’s top cells are blanked, against random cells (probability drop; for count, change in log(1+count)). Occlusion wins on every type in both test sets; every 95% lower bound on the difference is above zero.</figcaption></figure>
+
+  <ul>
+    <li><b>It holds in Philadelphia</b>, the unseen city, where rollout tied random. Count is the weakest type there.</li>
+    <li><b>The test favours occlusion somewhat</b>, since both measure sensitivity to removing cells. Blanking was switched from grey to a blur to reduce this, and the other maps were rerun the same way: they still fail.</li>
+    <li><b>It is slow:</b> 256 model runs per answer, 1.48 s on a T4, against 0.009 s for attention maps.</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="week">9 · Week 5, continued</span>What the maps look like</h2>
+  <p class="lead">Brighter cells mattered more. The same tile and question under all four first maps; tiles were picked by a fixed rule, not for looks.</p>
+  <figure><img src="FIG/xai/followup_test_presence_yes_1.png"><figcaption>“Is a building on the right of a road present?” Right answer, yes. Cross-attention (second) looks the most “focused”, yet failed the deletion test; occlusion (right) looks diffuse, yet passed it.</figcaption></figure>
+
+  <div class="grid2">
+    <figure><img src="FIG/xai/occlusion_test_presence_right.png"><figcaption><code>test</code>, presence question, answered correctly.</figcaption></figure>
+    <figure><img src="FIG/xai/occlusion_test_presence_wrong.png"><figcaption><code>test</code>, presence question, answered wrongly.</figcaption></figure>
+    <figure><img src="FIG/xai/occlusion_test_phili_presence_right.png"><figcaption>Philadelphia, presence, correct.</figcaption></figure>
+    <figure><img src="FIG/xai/occlusion_test_phili_presence_wrong.png"><figcaption>Philadelphia, presence, wrong.</figcaption></figure>
+  </div>
+
+  <div class="box warn"><b>How to read these maps</b>“Changing these cells changed the answer most”, not “the model looked at this object”. The strongest cells are mostly scattered and do not trace the object asked about. Occlusion changes one cell at a time, so an object spread over many cells (a road, a block of houses) may show weakly. The dataset has no object outlines, so whether a map points at the right object cannot be measured.</div>
+</section>
+
+<section>
+  <h2><span class="week">9 · Week 5, follow-up</span>No-data strips</h2>
+  <p class="lead">Checked after occlusion was confirmed, so it could not change the choice.</p>
+  <figure><img src="FIG/xai/followup_test_phili_strip_1.png"><figcaption>A Philadelphia tile with a black no-data strip along the top, under all four maps.</figcaption></figure>
+  <table>
+    <tr><th>Finding</th><th class="n">test</th><th class="n">test_phili</th></tr>
+    <tr><td>Sampled questions on strip tiles</td><td class="n">37 of 1,892 (2%)</td><td class="n">638 of 1,937 (33%)</td></tr>
+    <tr><td>Occlusion beats random without strip tiles</td><td class="n">every type</td><td class="n">every type</td></tr>
+    <tr><td>Occlusion’s top 20% of cells in or beside the strip (chance)</td><td class="n">17.8% (12.7%)</td><td class="n">52.2% (21.7%)</td></tr>
+    <tr><td>Rollout’s top 20% on the outer ring, tiles without strips (chance 23.4%)</td><td class="n">45.9%</td><td class="n">52.2%</td></tr>
+  </table>
+  <ul>
+    <li><b>The confirmation stands:</b> without strip tiles, occlusion still beats random on every type in each test set.</li>
+    <li><b>On Philadelphia strip tiles, occlusion’s strongest cells sit at the strip</b>, at 2.4× chance. Greying out black pixels is a large edit, so this may be the method rather than the model; the two were not separated. The RAG explanations therefore add a fixed warning on strip tiles.</li>
+    <li><b>Rollout’s pull towards strips is a pull towards edges</b>, which it shows on tiles without strips too.</li>
+    <li><b>Strips do not explain the Philadelphia drop:</b> accuracy on its strip tiles is not consistently lower than on its other tiles.</li>
+  </ul>
+</section>
+
+<!-- ============================== 10 RAG ============================== -->
+<section>
+  <h2><span class="week">10 · Week 6</span>RAG explanations</h2>
+  <p class="lead">Retrieval-augmented explanation: for each answer, find the training questions the model treats as most similar, show what their true answers were, and warn when they disagree with the model. Nothing new is trained.</p>
+
+  <figure>
+  <img src="DIAG/rag_pipeline.svg" style="width:100%">
+  </figure>
+
+  <h3>Step 1: does retrieval find anything useful?</h3>
+  <p>Before writing any explanation, retrieval itself was tested. For one question per test tile and type (13,128 questions): does disagreement between the model and its 5 neighbours flag the model’s wrong answers better than disagreement with 5 <i>random</i> training questions of the same type? Rule fixed in advance: the difference must have a 95% bootstrap lower bound above zero.</p>
+  <figure class="narrow"><img src="CH/retrieval_auroc.svg"><figcaption>AUROC: 0.5 is chance, 1.0 is perfect. Retrieval beats random on all four types (differences +0.26, +0.14, +0.16, +0.07; all lower bounds above zero).</figcaption></figure>
+  <ul>
+    <li><b>Count’s warning is mostly about size:</b> random neighbours already reach 0.778, because a large count disagrees with almost anything and large counts are more often wrong. Retrieval adds less there.</li>
+    <li><b>The neighbours mostly agree with the model</b> (79–95% of the time), as expected, since the heads read the same vector. So retrieval is a second opinion from the same model’s memory, not a better model.</li>
+    <li><b>Similarity scores are not shown:</b> nearest neighbours score 0.99–1.00 on every type, so the scale says little. Explanations give a neighbour’s rank (#1 to #5) instead.</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="week">10 · Week 6, continued</span>The uncertainty warning</h2>
+
+  <p><b>Rule, fixed before any result:</b> a yes/no or area answer is warned when fewer than 3 of its 5 neighbours have it as their true answer; a count is warned when, rounded, it lies outside the neighbours’ range of true counts.</p>
+  <figure class="narrow"><img src="CH/warning_rates.svg"><figcaption>How often the model is wrong when warned and when not, both test sets pooled (13,128 questions).</figcaption></figure>
+  <div class="grid2">
+    <div class="box" style="margin-top:0"><b>When it warns, take it seriously</b>A warned answer is about 3–4× as likely to be wrong (count about 2.4×). This holds in both test sets.</div>
+    <div class="box warn" style="margin-top:0"><b>Silence is not a guarantee</b>It fires on only 1–12% of questions, so most wrong answers are not warned. Count almost never warns, because the neighbours’ range is usually wide.</div>
+  </div>
+
+</section>
+<section>
+  <h2><span class="week">10 · Week 6, continued</span>The explanation text</h2>
+  <h3 style="margin-top:4pt">Step 3: the explanation</h3>
+  <p>Everything that is a plain fact is written by code. The LLM (<code>openai/gpt-oss-120b</code> on Groq’s free tier) writes one paragraph about the neighbours, from a facts sheet that never includes the true answer or whether the model was right. Code checks the paragraph and replaces it with a fixed template if it uses a number not in the facts, cites a neighbour that does not exist, says what is in the image, gives reasons for the answer (“based on”, “the model sees”), calls anything correct or wrong, runs over 90 words, or adds or leaves out the warning against the rule.</p>
+
+  <p style="margin-bottom:2pt"><b>Example</b> (a warned count question; the true answer was 71). <span class="code" style="color:var(--muted)">Grey: written by code.</span> <span class="llm" style="background:#fff3cd;padding:0 2pt">Yellow: written by the LLM, checked.</span></p>
+  <div class="quote"><span class="code">The model answered “4”.</span> <span class="llm">The model’s answer is uncertain because its count of 4 lies outside the range of true answers (6 to 12) seen in similar cases. Among the five most similar training questions, #1 asks “What is the amount of buildings?” with a true answer of 6, and #5 asks the same question with a true answer of 9; none of the similar cases have a true answer of 4.</span> <span class="code">Changing the cells at the top centre and top left of the tile changed the answer most. That tells you what the answer depended on, not where anything is.</span></div>
+
+  <table>
+    <tr><th>Full run</th><th class="n">Questions</th><th class="n">LLM paragraph passed the checks</th><th class="n">Fell back to the template</th></tr>
+    <tr><td>Main set (balanced by type, test set and right/wrong)</td><td class="n">64</td><td class="n">60</td><td class="n">4</td></tr>
+    <tr><td>Warned set</td><td class="n">16</td><td class="n">11</td><td class="n">5</td></tr>
+  </table>
+  <p style="font-size:9pt;color:var(--muted)">80 requests, 11.5 minutes, within the free tier. Three pilot rounds shaped the design: the first prompt made the LLM invent training cases it was not given, blame the warning on the model’s confidence, and claim the neighbours caused the answer. Each problem got a rule and a check.</p>
+
+  <div class="box bad"><b>Limits of the RAG layer</b>
+  <ul style="margin:0">
+    <li><b>Unanimous neighbours can back a wrong answer.</b> When all 5 share the model’s wrong answer, the paragraph makes it sound well supported.</li>
+    <li><b>Some LLM statements are not checked</b>, such as arithmetic on the facts (“none of the similar cases has 4”).</li>
+    <li><b>Whether the explanations help people was not measured.</b> A blind rating (80 pairs, identical except for the neighbour paragraph, decision rule fixed in advance) was designed and generated but not carried out.</li>
+  </ul></div>
+</section>
+
+<!-- ============================== 11 LIMITS + NEXT ============================== -->
+<section>
+  <h2><span class="week">11 · Limitations, and what comes next</span>Where the results stop</h2>
+  <table>
+    <tr><th>Limitation</th><th>Consequence</th></tr>
+    <tr><td>Large drop in an unseen city (−13 points; area −21)</td><td>The model should not be trusted on new regions without retraining or adaptation.</td></tr>
+    <tr><td>Count in Philadelphia barely beats the median guess (4.90 vs 5.25)</td><td>Counts there are close to uninformative.</td></tr>
+    <tr><td>Only zero-shot CLIP was compared</td><td>No claim that the architecture beats a fine-tuned foundation model.</td></tr>
+    <tr><td>The larger model could not be trained stably</td><td>Whether more capacity helps is unknown; a pre-norm Transformer is the next thing to try.</td></tr>
+    <tr><td>One seed for the full run</td><td>Small differences (under ~1 point) between full-run results are not established.</td></tr>
+    <tr><td>No object outlines in RSVQA</td><td>Explanation maps are tested for faithfulness, not for pointing at the right object.</td></tr>
+    <tr><td>Occlusion behaves oddly at no-data strips</td><td>Explanations add a fixed caution on strip tiles.</td></tr>
+    <tr><td>RAG warning misses most errors; human rating not run</td><td>Present the warning as a “be careful” signal; make no claim about helping users.</td></tr>
+    <tr><td>RSVQA answers come from OpenStreetMap</td><td>Labels are generated automatically and can be wrong or out of date; accuracy is measured against them.</td></tr>
+  </table>
+
+  <h3>Week 7: the demo app</h3>
+  <ul>
+    <li>A local web app that runs on a MacBook (M1, 8 GB): pick a tile, ask a question, see the answer, the occlusion map and the explanation.</li>
+    <li>A fixed set of demo tiles with pre-computed explanations, so the demo needs no GPU and no network; live LLM calls only for new questions, with the template as fallback.</li>
+    <li>Optional: rewriting free-form questions into the RSVQA question style, always showing the rewrite on screen.</li>
+    <li>Error analysis and ablations (for example, concat against cross-attention fusion), a backup demo video, and a short animation for the README.</li>
+  </ul>
+  <h3>Week 8: final report and presentation</h3>
+  <p>Built from this document, with the demo, the error analysis and the limitations above.</p>
+</section>
+
+<!-- ============================== APPENDIX ============================== -->
+<section style="font-size:9pt">
+  <h2><span class="week">Appendix</span>Settings, files and how to run</h2>
+  <h3>Final HR settings (<code>configs/hr_config.yaml</code>)</h3>
+  <table>
+    <tr><th>Group</th><th>Values</th></tr>
+    <tr><td>Data</td><td>image 512×512; 7 answers (yes, no, 5 area ranges with edges 0 / 10 / 100 / 1000 m²); batch 32; tiles cached</td></tr>
+    <tr><td>Model</td><td>CNN channels 32-64-128-128-128; Transformer width 128, 2 layers, 4 heads, feed-forward 256, dropout 0.1; question embedding 128; fused vector 256; cross-attention fusion</td></tr>
+    <tr><td>Training</td><td>peak learning rate 1.5e-4 (tuned), warm-up + cosine; 10 epochs; count loss on log(1+count), weight 1.0; mixed precision; fixed seed; best checkpoint by the validation score</td></tr>
+    <tr><td>XAI</td><td>occlusion on a 16×16 grid; deletion by blur; no-data cell = at least 25% black pixels</td></tr>
+    <tr><td>RAG</td><td>k = 5 neighbours, same question type, cosine on the fused vector; warning when fewer than 3 agree (counts: outside the range); LLM <code>openai/gpt-oss-120b</code> via an OpenAI-compatible API, key read from the <code>GROQ_API_KEY</code> environment variable; 90-word limit; 8 s between requests</td></tr>
+  </table>
+
+  <h3>Code</h3>
+  <table>
+    <tr><th>File</th><th>Role</th></tr>
+    <tr><td><code>src/data_pipeline.py</code></td><td>loading LR and HR, training-only vocabularies and statistics, tile cache, streaming</td></tr>
+    <tr><td><code>src/models/hybrid_encoder.py</code></td><td>CNN stem + Transformer encoder</td></tr>
+    <tr><td><code>src/models/vqa_head.py</code></td><td>question encoder, fusion, the two heads, the loss</td></tr>
+    <tr><td><code>src/models/clip_baseline.py</code></td><td>zero-shot CLIP comparison</td></tr>
+    <tr><td><code>src/train.py</code>, <code>src/evaluate.py</code></td><td>training (resumable) and evaluation by question type and test set</td></tr>
+    <tr><td><code>src/explain.py</code></td><td>the five maps, the deletion test and the sanity checks</td></tr>
+    <tr><td><code>src/rag/retrieval_index.py</code></td><td>the retrieval index and its test against random neighbours</td></tr>
+    <tr><td><code>src/rag/explain_agent.py</code></td><td>facts, LLM paragraph, checks, template, warning statistics</td></tr>
+    <tr><td><code>tests/</code></td><td>206 tests, one module per source file; HR paths tested on a small synthetic dataset</td></tr>
+    <tr><td><code>notebooks/colab_hr_pilot.ipynb</code></td><td>the Colab runner for every step</td></tr>
+  </table>
+
+  <h3>Full reports in the repository (<code>reports/</code>)</h3>
+  <table>
+    <tr><th>Topic</th><th>File</th></tr>
+    <tr><td>Week 1 baseline</td><td><code>baseline_results_week1_baseline_20261014-130407.md</code></td></tr>
+    <tr><td>HR pilots and tuning</td><td><code>baseline_results_hr_pilot_*.md</code>, <code>baseline_results_tune_lr1.5e-4_20261029-101754.md</code></td></tr>
+    <tr><td>Full run</td><td><code>baseline_results_hr_full_20261031-090319.md</code></td></tr>
+    <tr><td>CLIP</td><td><code>baseline_results_clip_vit-large-patch14.md</code></td></tr>
+    <tr><td>XAI</td><td><code>xai_results_hr_full_20261031-090319*.md</code></td></tr>
+    <tr><td>RAG</td><td><code>rag_retrieval_hr_full_20261031-090319.md</code>, <code>rag_explanations_hr_full_20261031-090319*.md</code></td></tr>
+  </table>
+</section>
+
+</body>
+</html>

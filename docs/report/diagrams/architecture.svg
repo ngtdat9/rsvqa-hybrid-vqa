@@ -1,0 +1,34 @@
+<svg viewBox="0 0 700 300" width="700" height="300" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+<rect width="700" height="300" fill="#ffffff"/>
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#59636e"/></marker></defs>
+    <g font-size="11" fill="#1f2328">
+      <!-- image path -->
+      <rect x="10" y="40" width="96" height="60" rx="8" fill="#f5f7f9" stroke="#d8dee4"/>
+      <text x="58" y="66" text-anchor="middle" font-weight="600">Aerial tile</text><text x="58" y="82" text-anchor="middle" fill="#59636e" font-size="10">512 × 512 RGB</text>
+      <rect x="132" y="40" width="112" height="60" rx="8" fill="#e8f3fa" stroke="#0072B2"/>
+      <text x="188" y="62" text-anchor="middle" font-weight="600">CNN stem</text><text x="188" y="77" text-anchor="middle" fill="#59636e" font-size="10">5 conv stages</text><text x="188" y="90" text-anchor="middle" fill="#59636e" font-size="10">→ 16×16 patch grid</text>
+      <rect x="262" y="40" width="144" height="60" rx="8" fill="#e8f3fa" stroke="#0072B2"/>
+      <text x="334" y="62" text-anchor="middle" font-weight="600">Transformer encoder</text><text x="334" y="77" text-anchor="middle" fill="#59636e" font-size="10">2 layers, 4 heads</text><text x="334" y="90" text-anchor="middle" fill="#59636e" font-size="10">256 patch tokens</text>
+      <!-- question path -->
+      <rect x="10" y="190" width="96" height="60" rx="8" fill="#f5f7f9" stroke="#d8dee4"/>
+      <text x="58" y="216" text-anchor="middle" font-weight="600">Question</text><text x="58" y="232" text-anchor="middle" fill="#59636e" font-size="10">“Is a road present?”</text>
+      <rect x="132" y="190" width="266" height="60" rx="8" fill="#fdf5e6" stroke="#E69F00"/>
+      <text x="265" y="214" text-anchor="middle" font-weight="600">Question encoder</text><text x="265" y="230" text-anchor="middle" fill="#59636e" font-size="10">word embeddings, one vector per word</text>
+      <!-- fusion -->
+      <rect x="430" y="100" width="120" height="100" rx="8" fill="#eef6f1" stroke="#009E73"/>
+      <text x="490" y="133" text-anchor="middle" font-weight="600">Cross-attention</text><text x="490" y="148" text-anchor="middle" font-weight="600">fusion</text>
+      <text x="490" y="165" text-anchor="middle" fill="#59636e" font-size="10">each word attends</text><text x="490" y="178" text-anchor="middle" fill="#59636e" font-size="10">over the 256 patches</text><text x="490" y="193" text-anchor="middle" fill="#0b6b4f" font-size="10" font-weight="600">→ fused vector (256)</text>
+      <!-- heads -->
+      <rect x="580" y="60" width="112" height="66" rx="8" fill="#f5f7f9" stroke="#8c959f"/>
+      <text x="636" y="83" text-anchor="middle" font-weight="600">Answer head</text><text x="636" y="99" text-anchor="middle" fill="#59636e" font-size="10">7 answers: yes, no,</text><text x="636" y="112" text-anchor="middle" fill="#59636e" font-size="10">5 area ranges</text>
+      <rect x="580" y="174" width="112" height="66" rx="8" fill="#f5f7f9" stroke="#8c959f"/>
+      <text x="636" y="197" text-anchor="middle" font-weight="600">Count head</text><text x="636" y="213" text-anchor="middle" fill="#59636e" font-size="10">one number,</text><text x="636" y="226" text-anchor="middle" fill="#59636e" font-size="10">trained on log(1+count)</text>
+      <!-- arrows -->
+      <g stroke="#59636e" stroke-width="1.4" fill="none" marker-end="url(#a)">
+        <path d="M106 70 H130"/><path d="M244 70 H260"/><path d="M406 70 C420 70 420 130 428 135"/>
+        <path d="M106 220 H130"/><path d="M398 220 C420 220 420 170 428 165"/>
+        <path d="M550 140 C565 140 565 100 578 95"/><path d="M550 160 C565 160 565 200 578 205"/>
+      </g>
+      <text x="350" y="285" text-anchor="middle" fill="#59636e" font-size="10">About 0.9 million parameters in total. The fused vector (256 numbers) is also what the RAG retrieval searches on.</text>
+    </g>
+  </svg>

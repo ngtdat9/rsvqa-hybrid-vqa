@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Key results</title>
+<style>
+  :root { --ink: #1f2328; --muted: #59636e; --rule: #d8dee4; --blue: #0072B2; }
+  html, body { margin: 0; background: #ffffff; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; color: var(--ink); width: 900px; padding: 14px; box-sizing: border-box; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .kpi { border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; }
+  .v { font-size: 34px; font-weight: 700; color: var(--blue); letter-spacing: -0.8px; }
+  .l { font-size: 13.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="kpi"><div class="v">90.2%</div><div class="l">test accuracy; count error 0.91 objects</div></div>
+  <div class="kpi"><div class="v">76.9%</div><div class="l">in Philadelphia, a city never seen in training</div></div>
+  <div class="kpi"><div class="v">+40.8 pts</div><div class="l">above zero-shot CLIP (ViT-L/14) on the test set</div></div>
+  <div class="kpi"><div class="v">3–4×</div><div class="l">more likely wrong when the RAG warning fires</div></div>
+</div>
+</body>
+</html>
