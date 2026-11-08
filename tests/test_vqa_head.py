@@ -223,3 +223,18 @@ def test_question_longer_than_max_len_raises_clear_error():
     batch = make_batch(batch_size=2, max_len=6)
     with pytest.raises(ValueError, match="max_question_len"):
         model(batch)
+
+
+@pytest.mark.parametrize("fusion_type", ["concat", "cross_attention"])
+def test_forward_is_fuse_then_heads(fusion_type: str):
+    torch.manual_seed(0)
+    model = make_model(fusion_type=fusion_type).eval()
+    batch = {"image": torch.randn(2, 3, 32, 32), "question_tokens": torch.randint(2, 20, (2, 5)),
+             "question_len": torch.tensor([5, 3])}
+    with torch.no_grad():
+        fused, _ = model.fuse(model.encoder(batch["image"]), batch["question_tokens"], batch["question_len"])
+        split = model.heads(fused)
+        whole = model(batch)
+    assert fused.shape == (2, TEST_CONFIG["fusion_hidden_dim"])
+    assert torch.equal(split["class_logits"], whole["class_logits"])
+    assert torch.equal(split["count_pred"], whole["count_pred"])

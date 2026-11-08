@@ -160,22 +160,30 @@ class HybridVQAModel(nn.Module):
         self.classifier = nn.Linear(fusion_hidden_dim, vocab_size)
         self.count_head = nn.Linear(fusion_hidden_dim, 1)
 
+    def fuse(
+        self, enc_out: EncoderOutput, question_tokens: torch.Tensor, question_len: torch.Tensor,
+        return_attention: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """The fused image-question vector [B, fusion_hidden_dim] both heads read, and the
+        cross-attention weights when asked for. Split out so one encoded tile can be fused
+        with many questions (the retrieval index does this)."""
+        if self.fusion_type == "concat":
+            q_embed = self.question_encoder(question_tokens, question_len)
+            return self.fusion(enc_out.pooled, q_embed), None
+        q_tokens, q_mask = self.question_encoder.encode_tokens(question_tokens, question_len)
+        return self.fusion(enc_out.patch_tokens, q_tokens, q_mask, return_attention)
+
+    def heads(self, fused: torch.Tensor) -> dict[str, torch.Tensor]:
+        class_logits = self.classifier(fused)                                     # [B, vocab_size]
+        count_pred = nn.functional.softplus(self.count_head(fused)).squeeze(-1)    # [B], >=0, in raw counts
+        return {"class_logits": class_logits, "count_pred": count_pred}
+
     def forward(
         self, batch: dict[str, torch.Tensor], return_attention: bool = False
     ) -> dict[str, torch.Tensor]:
         enc_out: EncoderOutput = self.encoder(batch["image"])
-        attention = None
-        if self.fusion_type == "concat":
-            q_embed = self.question_encoder(batch["question_tokens"], batch["question_len"])
-            fused = self.fusion(enc_out.pooled, q_embed)
-        else:
-            q_tokens, q_mask = self.question_encoder.encode_tokens(
-                batch["question_tokens"], batch["question_len"]
-            )
-            fused, attention = self.fusion(enc_out.patch_tokens, q_tokens, q_mask, return_attention)
-        class_logits = self.classifier(fused)                                     # [B, vocab_size]
-        count_pred = nn.functional.softplus(self.count_head(fused)).squeeze(-1)    # [B], >=0, in raw counts
-        outputs = {"class_logits": class_logits, "count_pred": count_pred}
+        fused, attention = self.fuse(enc_out, batch["question_tokens"], batch["question_len"], return_attention)
+        outputs = self.heads(fused)
         if attention is not None:
             outputs["cross_attention"] = attention                                 # [B, L, N]
         return outputs

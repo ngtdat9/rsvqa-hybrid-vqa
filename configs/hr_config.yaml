@@ -93,3 +93,11 @@ xai_followup_figures: 6                # per split, each of: correct "yes" prese
 # Fixed before any result: a map at or above these mean rank correlations fails.
 xai_sanity_max_correlation: 0.5        # trained model vs random weights
 xai_question_max_correlation: 0.9      # two different questions on the same tile
+
+# --- RAG retrieval (src/rag/retrieval_index.py) ---
+rag_k: 5                               # neighbours per question
+rag_seed: 0                            # test question pool and the random control
+rag_tile_batch_size: 16                # tiles encoded at once; each is then fused with its ~100 questions
+rag_question_batch_size: 512
+rag_search_chunk_rows: 65536           # index rows compared at once: bounds memory, also on the Mac
+rag_bootstrap_samples: 1000
