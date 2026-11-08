@@ -264,9 +264,12 @@ def test_generate_runs_end_to_end_with_a_fake_llm(trained_run, tmp_path: Path):
     report = run_generate(run_dir, settings, client=Echo(), out_dir=tmp_path / "reports")
     assert "## Uncertainty warning on the test pool" in report and "| pooled | presence |" in report
     assert "| with neighbours |" in report and "## Explanations" in report
+    assert "Left out so the rating stays blind" in report and "True answer:" not in report
     items = json.loads((run_dir / "rag_explanations_full.json").read_text())
     assert items and all(item["facts"]["neighbours"] for item in items)
     assert {item["facts"]["split"] for item in items} == {"test", "test_phili"}
     sheet = list(csv.DictReader((tmp_path / "reports" / f"rag_rating_{run_dir.name}.csv").open()))
     assert len(sheet) == len(items)
     assert (run_dir / "rag_rating_key_full.json").exists()
+    pilot = run_generate(run_dir, settings, pilot=True, client=Echo(), out_dir=tmp_path / "reports")
+    assert "True answer:" in pilot and "Left out" not in pilot

@@ -555,13 +555,15 @@ def run_generate(
     (run_dir / f"rag_explanations_{'pilot' if pilot else 'full'}.json").write_text(json.dumps(items, indent=1))
     sheet = out_dir / f"rag_rating_{name}.csv"
     write_rating_sheet(items, config["rag_seed"], sheet, run_dir / f"rag_rating_key_{'pilot' if pilot else 'full'}.json")
-    return generate_report(name, items, pools, types, config, started, llm_started, sheet)
+    return generate_report(name, items, pools, types, config, started, llm_started, sheet, blind=not pilot)
 
 
 def generate_report(
     name: str, items: list[dict[str, Any]], pools: dict[str, PoolResult], types: list[str],
-    config: dict[str, Any], started: float, llm_started: float | None, sheet: Path,
+    config: dict[str, Any], started: float, llm_started: float | None, sheet: Path, blind: bool = False,
 ) -> str:
+    """The report. When blind (the real rating set), the labelled texts are left out: they would show which
+    text has the neighbours and whether the model was right before the rating is done."""
     sections = [
         f"# RAG explanations: {name}\n\n"
         f"LLM: `{config['rag_llm_model']}` at `{config['rag_llm_base_url']}`. Rating set: {len(items)} questions "
@@ -587,7 +589,10 @@ def generate_report(
         lines += ["", "Why texts fell back:", ""] + [f"- {reason}: {n}" for reason, n in sorted(reasons.items())]
     sections.append("\n".join(lines) + "\n")
     examples = ["## Explanations\n"]
-    for item in items:
+    if blind:
+        examples.append("Left out so the rating stays blind. After scoring, the labelled texts are in "
+                        f"`rag_explanations_full.json` in the run folder.\n")
+    for item in ([] if blind else items):
         f = item["facts"]
         examples.append(
             f"### {item['id']}: {f['question']}\n\nTrue answer: {f['truth']}; model {'right' if f['correct'] else 'wrong'}; "
