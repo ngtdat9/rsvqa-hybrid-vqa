@@ -120,6 +120,8 @@ rag_top_cells: 3                       # occlusion cells described, as 3x3 zones
 rag_warning_min_agree: 3
 rag_rating_per_group: 4                # per test split, type and right/wrong: 2 x 4 x 2 x 4 = 64 questions
 rag_pilot_rating_per_group: 1          # 16 questions
+rag_warned_per_type: 2                 # separate warned set: 2 x 4 x 2 = 16 questions (fewer if a type has too few)
+rag_pilot_warned_per_type: 1           # 8 questions
 # Lower-case regular expressions; a match sends the text back to the template.
 rag_banned_phrases:
   - '\b(shows?|showing|highlights?|highlighted|contains?|locates?|located|points? to|detects?|detected|identifies|identified|spots?|spotted)\b[^.]{0,60}\b(buildings?|roads?|houses?|residential|commercial|water|trees?|parking|cars?|fields?|grass|objects?)\b'

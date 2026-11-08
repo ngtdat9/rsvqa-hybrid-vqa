@@ -447,6 +447,21 @@ def rating_rows(result: PoolResult, per_group: int) -> list[int]:
     return picked
 
 
+def warned_rows(result: PoolResult, per_type: int, exclude: set[int]) -> list[int]:
+    """Up to ``per_type`` warned questions per type, in the pool's random order, skipping ``exclude``.
+
+    The main set holds few warned questions (the warning fires on about 1-13% of a type), so the
+    rating would barely test it; this separate set does."""
+    taken: dict[str, int] = defaultdict(int)
+    picked = []
+    for row, qtype, warned in zip(result.rows, result.types, result.warned):
+        if warned and row not in exclude and taken[qtype] < per_type:
+            taken[qtype] += 1
+            picked.append(row)
+    return picked
+
+
+RATING_SETS = ("main", "warned")
 RATING_FIELDS = ("id", "split", "question", "model_answer", "true_answer", "model_right", "text_1", "text_2",
                  "useful_1", "useful_2", "honest_1", "honest_2", "prefer")
 
@@ -458,10 +473,10 @@ def write_rating_sheet(items: list[dict[str, Any]], seed: int, sheet: Path, key:
     with sheet.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=RATING_FIELDS)
         writer.writeheader()
-        for item in items:
+        for item in rng.sample(items, len(items)):  # shuffled: position must not reveal the set
             first = rng.choice(CONDITIONS)
             second = CONDITIONS[1] if first == CONDITIONS[0] else CONDITIONS[0]
-            order[item["id"]] = {"order": [first, second],
+            order[item["id"]] = {"order": [first, second], "set": item.get("set", "main"),
                                  "sources": {c: item[c]["source"] for c in CONDITIONS}}
             facts = item["facts"]
             writer.writerow({
@@ -492,60 +507,94 @@ def _preference_line(label: str, wins: dict[str, int], same: int) -> str:
             f"| {low:.0%} to {high:.0%} | {same} |")
 
 
+PAIR_GROUPS = ("both LLM", "with: LLM, without: template", "with: template, without: LLM", "both template")
+
+
+def _tally(rows: list[tuple[dict[str, str], dict[str, Any]]]) -> tuple[dict, dict, dict, int]:
+    """Preferences and scores per pair group (and 'all') for rated rows with their key entries."""
+    groups = (*PAIR_GROUPS, "all")
+    scores = {g: {c: {"useful": [], "honest": []} for c in CONDITIONS} for g in groups}
+    wins = {g: {c: 0 for c in CONDITIONS} for g in groups}
+    same = {g: 0 for g in groups}
+    unrated = 0
+    for row, entry in rows:
+        conditions, sources = entry["order"], entry["sources"]
+        with_llm, without_llm = (sources[c] == "llm" for c in CONDITIONS)
+        group = PAIR_GROUPS[0] if with_llm and without_llm else PAIR_GROUPS[1] if with_llm else \
+            PAIR_GROUPS[2] if without_llm else PAIR_GROUPS[3]
+        for g in (group, "all"):
+            for slot, condition in zip(("1", "2"), conditions):
+                for measure in ("useful", "honest"):
+                    value = row[f"{measure}_{slot}"].strip()
+                    if value:
+                        scores[g][condition][measure].append(float(value))
+        prefer = row["prefer"].strip().lower()
+        if prefer in ("1", "2"):
+            for g in (group, "all"):
+                wins[g][conditions[int(prefer) - 1]] += 1
+        elif prefer == "same":
+            same[group] += 1
+            same["all"] += 1
+        else:
+            unrated += 1
+    return scores, wins, same, unrated
+
+
+def _preference_line(label: str, wins: dict[str, int], same: int) -> str:
+    decided = wins["with_neighbours"] + wins["without_neighbours"]
+    if not decided:
+        return f"| {label} | 0 | — | — | {same} |"
+    low, high = wilson_interval(wins["with_neighbours"], decided)
+    return (f"| {label} | {decided} | {wins['with_neighbours']} ({wins['with_neighbours'] / decided:.0%}) "
+            f"| {low:.0%} to {high:.0%} | {same} |")
+
+
+def _tables(scores: dict, wins: dict, same: dict) -> list[str]:
+    mean = lambda values: f"{np.mean(values):.2f} (n={len(values)})" if values else "—"
+    lines = ["| Pairs | With a preference | Preferred with neighbours | 95% CI | Same |", "|---|---|---|---|---|"]
+    lines += [_preference_line(g, wins[g], same[g]) for g in (*PAIR_GROUPS, "all")]
+    lines += ["", "| Pairs | Condition | Useful (1-3) | Honest about uncertainty (1-3) |", "|---|---|---|---|"]
+    lines += [f"| {g} | {c.replace('_', ' ')} | {mean(scores[g][c]['useful'])} | {mean(scores[g][c]['honest'])} |"
+              for g in ("both LLM", "all") for c in CONDITIONS]
+    return lines
+
+
 def score_ratings(sheet: Path, key: Path) -> str:
     """Unblinds a filled-in sheet. ``prefer`` is 1, 2 or 'same'; scores are 1 (poor) to 3 (good).
 
-    Only pairs where both texts are the LLM's decide: a pair of LLM text against the template compares
-    writers, not retrieval. All pairs, and pairs by source, are reported alongside."""
+    Only main-set pairs where both texts are the LLM's decide: a pair of LLM text against the template
+    compares writers, not retrieval. The warned set is reported on its own and decides nothing."""
     key_data = json.loads(key.read_text())
-    groups = ("both LLM", "with: LLM, without: template", "with: template, without: LLM", "both template")
-    scores = {g: {c: {"useful": [], "honest": []} for c in CONDITIONS} for g in (*groups, "all")}
-    wins = {g: {c: 0 for c in CONDITIONS} for g in (*groups, "all")}
-    same = {g: 0 for g in (*groups, "all")}
-    unrated = 0
     with sheet.open(newline="") as f:
-        for row in csv.DictReader(f):
-            entry = key_data[row["id"]]
-            conditions, sources = entry["order"], entry["sources"]
-            with_llm, without_llm = (sources[c] == "llm" for c in CONDITIONS)
-            group = groups[0] if with_llm and without_llm else groups[1] if with_llm else \
-                groups[2] if without_llm else groups[3]
-            for g in (group, "all"):
-                for slot, condition in zip(("1", "2"), conditions):
-                    for measure in ("useful", "honest"):
-                        value = row[f"{measure}_{slot}"].strip()
-                        if value:
-                            scores[g][condition][measure].append(float(value))
-            prefer = row["prefer"].strip().lower()
-            if prefer in ("1", "2"):
-                for g in (group, "all"):
-                    wins[g][conditions[int(prefer) - 1]] += 1
-            elif prefer == "same":
-                same[group] += 1
-                same["all"] += 1
-            else:
-                unrated += 1
+        rated = [(row, key_data[row["id"]]) for row in csv.DictReader(f)]
+    by_set = {name: [(r, e) for r, e in rated if e.get("set", "main") == name] for name in RATING_SETS}
+    scores, wins, same, unrated = _tally(by_set["main"])
     deciding = wins["both LLM"]
     decided = deciding["with_neighbours"] + deciding["without_neighbours"]
     low, _ = wilson_interval(deciding["with_neighbours"], decided)
     improves = decided > 0 and low > 0.5
     lines = [
         "# Blind rating of RAG explanations\n",
-        "**Rule, fixed before rating:** among pairs where both texts are written by the LLM and a preference "
-        "is given, retrieval improves the explanations if the share preferring the one with neighbours has a "
-        "95% Wilson lower bound above 0.5. Pairs involving the template compare writers, not retrieval, and "
-        "do not decide.\n",
+        "**Rule, fixed before rating:** among main-set pairs where both texts are written by the LLM and a "
+        "preference is given, retrieval improves the explanations if the share preferring the one with "
+        "neighbours has a 95% Wilson lower bound above 0.5. Pairs involving the template compare writers, "
+        "not retrieval, and do not decide.\n",
         (f"**Result: {'retrieval improves the explanations' if improves else 'no clear improvement from retrieval'}.**\n"
          if decided else "**No preferences given yet on pairs where both texts are the LLM's.**\n"),
+        f"## Main set ({len(by_set['main'])} questions)\n",
         f"Not rated: {unrated}.\n",
-        "| Pairs | With a preference | Preferred with neighbours | 95% CI | Same |",
-        "|---|---|---|---|---|",
+        *_tables(scores, wins, same),
     ]
-    lines += [_preference_line(g, wins[g], same[g]) for g in (*groups, "all")]
-    mean = lambda values: f"{np.mean(values):.2f} (n={len(values)})" if values else "—"
-    lines += ["", "| Pairs | Condition | Useful (1-3) | Honest about uncertainty (1-3) |", "|---|---|---|---|"]
-    lines += [f"| {g} | {c.replace('_', ' ')} | {mean(scores[g][c]['useful'])} | {mean(scores[g][c]['honest'])} |"
-              for g in ("both LLM", "all") for c in CONDITIONS]
+    if by_set["warned"]:
+        w_scores, w_wins, w_same, w_unrated = _tally(by_set["warned"])
+        lines += [
+            "", f"## Warned set ({len(by_set['warned'])} questions; does not decide)\n",
+            "Questions where the neighbour warning fired, rated in the same sheet. Only the text with "
+            "neighbours knows about the warning; this shows whether readers find it more honest about "
+            "uncertainty when it does.\n",
+            f"Not rated: {w_unrated}.\n",
+            *_tables(w_scores, w_wins, w_same),
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -580,15 +629,19 @@ def run_generate(
     pools: dict[str, PoolResult] = {}
     items: list[dict[str, Any]] = []
     per_group = config["rag_pilot_rating_per_group" if pilot else "rag_rating_per_group"]
+    warned_per_type = config["rag_pilot_warned_per_type" if pilot else "rag_warned_per_type"]
     llm_started = None
     for split in [s for s in config["splits"] if s.startswith("test")]:
         dataset = dataloaders[split].dataset
         pool = question_pool(dataset.qa_records, config["rag_seed"])
         pools[split] = score_pool(model, dataset, pool, index, train_truths, config, device, f"warning {split}")
-        for row in rating_rows(pools[split], per_group):
+        main = rating_rows(pools[split], per_group)
+        chosen = [(row, "main") for row in main] + [
+            (row, "warned") for row in warned_rows(pools[split], warned_per_type, set(main))]
+        for row, rating_set in chosen:
             facts = build_facts(model, dataset, split, row, index, train, train_truths, config, device)
             llm_started = llm_started or time.monotonic()
-            item = {"id": f"{split}-{row}", "facts": asdict(facts)}
+            item = {"id": f"{split}-{row}", "set": rating_set, "facts": asdict(facts)}
             for condition in CONDITIONS:
                 item[condition] = explain(facts, client, config, condition == "with_neighbours")
             items.append(item)
@@ -607,27 +660,39 @@ def generate_report(
 ) -> str:
     """The report. When blind (the real rating set), the labelled texts are left out: they would show which
     text has the neighbours and whether the model was right before the rating is done."""
+    pilot = name.endswith("_pilot")
+    in_set = {name_: [i for i in items if i.get("set", "main") == name_] for name_ in RATING_SETS}
     sections = [
         f"# RAG explanations: {name}\n\n"
-        f"LLM: `{config['rag_llm_model']}` at `{config['rag_llm_base_url']}`. Rating set: {len(items)} questions "
-        f"(up to {config['rag_pilot_rating_per_group' if name.endswith('_pilot') else 'rag_rating_per_group']} per "
-        "test split, type and right or wrong answer), each explained with and without the neighbours.\n",
+        f"LLM: `{config['rag_llm_model']}` at `{config['rag_llm_base_url']}`. Each question is explained with and "
+        "without the neighbours.\n\n"
+        f"- Main set: {len(in_set['main'])} questions (up to "
+        f"{config['rag_pilot_rating_per_group' if pilot else 'rag_rating_per_group']} per test split, type and "
+        "right or wrong answer). It decides.\n"
+        f"- Warned set: {len(in_set['warned'])} questions where the warning fired (up to "
+        f"{config['rag_pilot_warned_per_type' if pilot else 'rag_warned_per_type']} per test split and type, "
+        "not in the main set). Reported on its own.\n",
         "## Uncertainty warning on the test pool\n\n"
         f"Rule, fixed in advance: classification warns when fewer than {config['rag_warning_min_agree']} of the "
         f"{config['rag_k']} neighbours have the model's answer as their true answer; count warns when the rounded "
         "count is outside the neighbours' range of true counts. One question per tile and type.\n\n"
         + warning_table(pools, types),
     ]
-    lines = ["## Checks\n", "| Condition | LLM text shown | Fell back to the template | Tokens |", "|---|---|---|---|"]
+    lines = ["## Checks\n",
+             "Only main-set pairs where both texts are the LLM's decide the rating, so that count matters most.\n",
+             "| Set | Condition | LLM text shown | Fell back to the template | Tokens |", "|---|---|---|---|---|"]
     reasons: dict[str, int] = defaultdict(int)
-    for condition in CONDITIONS:
-        results = [item[condition] for item in items]
-        shown = sum(r["source"] == "llm" for r in results)
-        for r in results:
-            for failure in r["failures"]:
-                reasons[f"{condition.replace('_', ' ')}: {failure.split(':')[0]}"] += 1
-        lines.append(f"| {condition.replace('_', ' ')} | {shown} of {len(results)} | {len(results) - shown} "
-                     f"| {sum(r['tokens'] for r in results):,} |")
+    for set_name in RATING_SETS:
+        for condition in CONDITIONS:
+            results = [item[condition] for item in in_set[set_name]]
+            shown = sum(r["source"] == "llm" for r in results)
+            for r in results:
+                for failure in r["failures"]:
+                    reasons[f"{condition.replace('_', ' ')}: {failure.split(':')[0]}"] += 1
+            lines.append(f"| {set_name} | {condition.replace('_', ' ')} | {shown} of {len(results)} "
+                         f"| {len(results) - shown} | {sum(r['tokens'] for r in results):,} |")
+        both = sum(all(i[c]["source"] == "llm" for c in CONDITIONS) for i in in_set[set_name])
+        lines.append(f"| {set_name} | **both texts LLM** | {both} of {len(in_set[set_name])} | | |")
     if reasons:
         lines += ["", "Why texts fell back:", ""] + [f"- {reason}: {n}" for reason, n in sorted(reasons.items())]
     sections.append("\n".join(lines) + "\n")
@@ -638,7 +703,7 @@ def generate_report(
     for item in ([] if blind else items):
         f = item["facts"]
         examples.append(
-            f"### {item['id']}: {f['question']}\n\nTrue answer: {f['truth']}; model {'right' if f['correct'] else 'wrong'}; "
+            f"### {item['id']} ({item.get('set', 'main')} set): {f['question']}\n\nTrue answer: {f['truth']}; model {'right' if f['correct'] else 'wrong'}; "
             f"warning: {'yes' if f['warning'] else 'no'}; no-data strip: {'yes' if f['strip'] else 'no'}.\n\n"
             + "".join(f"- **{c.replace('_', ' ')}** ({item[c]['source']}"
                       + (f"; failed: {'; '.join(item[c]['failures'])}" if item[c]["failures"] else "")

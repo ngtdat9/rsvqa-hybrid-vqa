@@ -246,55 +246,69 @@ def test_wilson_interval_matches_a_known_value():
     assert abs(low - 0.531) < 1e-3 and abs(high - 0.888) < 1e-3
 
 
+def write_rows(sheet: Path, rows: list[dict]) -> None:
+    with sheet.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def test_rating_sheet_is_blind_and_scoring_unblinds_it(tmp_path: Path):
     items = []
-    for i in range(30):
-        facts = make_facts(row=i)
-        without_source = "llm" if i < 20 else "template"  # 20 pairs both LLM, 10 LLM against the template
-        items.append({"id": f"test-{i}", "facts": vars(facts) | {"neighbours": []},
+    for i in range(36):
+        facts = make_facts(row=i, warning=i >= 30)
+        without_source = "llm" if i < 20 or i >= 30 else "template"  # 20 main pairs both LLM, 10 against the template
+        items.append({"id": f"test-{i}", "set": "warned" if i >= 30 else "main", "facts": vars(facts) | {"neighbours": []},
                       "with_neighbours": {"text": f"WITH {i}", "source": "llm"},
                       "without_neighbours": {"text": f"WITHOUT {i}", "source": without_source}})
     sheet, key = tmp_path / "sheet.csv", tmp_path / "key.json"
     write_rating_sheet(items, 0, sheet, key)
     rows = list(csv.DictReader(sheet.open()))
-    assert "WITH" not in ",".join(rows[0].keys())
-    firsts = {row["text_1"].split()[0] for row in rows}
-    assert firsts == {"WITH", "WITHOUT"}  # the order varies, so position gives nothing away
+    assert "WITH" not in ",".join(rows[0].keys()) and "set" not in rows[0] and "warning" not in rows[0]
+    assert {row["text_1"].split()[0] for row in rows} == {"WITH", "WITHOUT"}  # the order varies within a row
+    positions = [int(row["id"].split("-")[1]) for row in rows]
+    assert sorted(positions) == list(range(36)) and positions != list(range(36))  # warned rows not all at the end
+    assert max(positions[:18]) >= 30
 
     # the rater prefers the text with neighbours every time, and rates it 3 against 1
+    number = lambda row: int(row["id"].split("-")[1])
     for row in rows:
         with_slot = "1" if row["text_1"].startswith("WITH ") else "2"
         other = "2" if with_slot == "1" else "1"
         row.update({f"useful_{with_slot}": "3", f"useful_{other}": "1", f"honest_{with_slot}": "3",
-                    f"honest_{other}": "2", "prefer": with_slot})
-    rows[0]["prefer"] = "same"
-    with sheet.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
+                    f"honest_{other}": "2", "prefer": "same" if number(row) == 0 else with_slot})
+    write_rows(sheet, rows)
     report = score_ratings(sheet, key)
-    assert "**Result: retrieval improves the explanations.**" in report
-    assert "| both LLM | 19 | 19 (100%) |" in report and report.split("| both LLM | 19 | 19 (100%) |")[1].split("\n")[0].endswith("| 1 |")
-    assert "| with: LLM, without: template | 10 | 10 (100%) |" in report
-    assert "| all | 29 | 29 (100%) |" in report
-    assert "| both LLM | with neighbours | 3.00 (n=20) | 3.00 (n=20) |" in report
-    assert "| all | without neighbours | 1.00 (n=30) | 2.00 (n=30) |" in report
+    main, warned = report.split("## Warned set")
+    assert "**Result: retrieval improves the explanations.**" in main
+    assert "## Main set (30 questions)" in main
+    assert "| both LLM | 19 | 19 (100%) |" in main and main.split("| both LLM | 19 | 19 (100%) |")[1].split("\n")[0].endswith("| 1 |")
+    assert "| with: LLM, without: template | 10 | 10 (100%) |" in main and "| all | 29 | 29 (100%) |" in main
+    assert "| both LLM | with neighbours | 3.00 (n=20) | 3.00 (n=20) |" in main
+    assert "| all | without neighbours | 1.00 (n=30) | 2.00 (n=30) |" in main
+    assert warned.startswith(" (6 questions; does not decide)") and "| both LLM | 6 | 6 (100%) |" in warned
 
-    # preferences on LLM-against-template pairs alone never decide
-    for row in rows[:20]:
-        row["prefer"] = ""
-    with sheet.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
+    # preferences on LLM-against-template pairs, or on the warned set, never decide
+    for row in rows:
+        if number(row) < 20:
+            row["prefer"] = ""
+    write_rows(sheet, rows)
     assert "**No preferences given yet on pairs where both texts are the LLM's.**" in score_ratings(sheet, key)
+
+
+def test_warned_set_takes_warned_questions_per_type_outside_the_main_set():
+    pool = PoolResult(rows=list(range(8)), types=["presence"] * 4 + ["count"] * 4,
+                      correct=[True] * 8, warned=[True, False, True, True, False, True, True, True])
+    assert ea.warned_rows(pool, 2, exclude=set()) == [0, 2, 5, 6]
+    assert ea.warned_rows(pool, 2, exclude={0, 5}) == [2, 3, 6, 7]
+    assert ea.warned_rows(pool, 5, exclude=set()) == [0, 2, 3, 5, 6, 7]
 
 
 def test_generate_runs_end_to_end_with_a_fake_llm(trained_run, tmp_path: Path):
     run_dir, base = trained_run
     settings = {**base, **{k: v for k, v in config().items() if k not in base}, "rag_k": 3,
                 "rag_search_chunk_rows": 4, "rag_tile_batch_size": 3, "rag_question_batch_size": 5,
-                "rag_rating_per_group": 1, "rag_llm_min_interval_s": 0}
+                "rag_rating_per_group": 1, "rag_warned_per_type": 1, "rag_llm_min_interval_s": 0}
 
     class Echo:
         def complete(self, messages):
@@ -307,6 +321,10 @@ def test_generate_runs_end_to_end_with_a_fake_llm(trained_run, tmp_path: Path):
     items = json.loads((run_dir / "rag_explanations_full.json").read_text())
     assert items and all(item["facts"]["neighbours"] for item in items)
     assert {item["facts"]["split"] for item in items} == {"test", "test_phili"}
+    assert "- Warned set:" in report and "| main | **both texts LLM** |" in report
+    for item in items:  # warned-set questions are warned and never repeat a main-set question
+        assert item["set"] == "main" or item["facts"]["warning"]
+    assert len({item["id"] for item in items}) == len(items)
     sheet = list(csv.DictReader((tmp_path / "reports" / f"rag_rating_{run_dir.name}.csv").open()))
     assert len(sheet) == len(items)
     assert (run_dir / "rag_rating_key_full.json").exists()
