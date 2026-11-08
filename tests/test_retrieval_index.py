@@ -159,7 +159,7 @@ def test_bootstrap_difference_is_zero_for_equal_scores_and_positive_for_a_better
 
 
 def results(correct: list[bool], agree: list[float], random_agree: list[float]) -> QueryResults:
-    r = QueryResults(*([] for _ in range(10)))
+    r = QueryResults(*([] for _ in QueryResults.__dataclass_fields__))
     r.correct, r.agreement, r.random_agreement = correct, agree, random_agree
     return r
 
@@ -182,6 +182,7 @@ def test_run_retrieval_writes_the_report_and_reuses_the_index(trained_run, monke
     for qtype in ("presence", "comp", "area", "count"):
         assert f"| {qtype} |" in report
     assert "Count MAE: model" in report
+    assert "| Type | Same question text | Mean similarity, neighbours | Mean similarity, random |" in report
     assert (run_dir / "retrieval" / "manifest.json").exists()
 
     monkeypatch.setattr(ri, "compute_features", lambda *a, **k: pytest.fail("index rebuilt"))
@@ -194,3 +195,23 @@ def test_pilot_uses_its_own_index_folder(trained_run):
     report = run_retrieval(run_dir, config, pilot=True)
     assert "(pilot subsets)" in report
     assert (run_dir / "retrieval_pilot" / "manifest.json").exists()
+
+
+def test_neighbour_descriptions_same_question_and_similarity_against_random(trained_run, tmp_path):
+    run_dir, config = trained_run
+    loaders = get_dataloaders(config)
+    train, test = loaders["train"].dataset, loaders["test"].dataset
+    model = build_model(config).eval()
+    features = build_index(model, train, tmp_path / "index", config, torch.device("cpu"), "ckpt")
+    index = RetrievalIndex(features.vectors, [r["type"] for r in train.qa_records], config["rag_search_chunk_rows"])
+    questions = np.array([r["question"] for r in train.qa_records], dtype=object)
+    questions[0] = "a different question"  # one train question no longer matches its type's text
+    results = ri.score_queries(model, test, list(range(len(test))), index, np.zeros(len(questions)),
+                               np.ones(len(questions), dtype=bool), questions, config, torch.device("cpu"),
+                               np.random.default_rng(0), "test")
+    k = config["rag_k"]
+    for qtype, r in results.items():
+        # the top k are the k most similar rows, so no k random rows of the type can beat their mean
+        assert all(n >= m - 1e-3 for n, m in zip(r.mean_similarity, r.random_similarity))
+        expected = {1.0, 1 - 1 / k} if qtype == train.qa_records[0]["type"] else {1.0}
+        assert set(np.round(r.same_question, 6)) <= {round(v, 6) for v in expected}

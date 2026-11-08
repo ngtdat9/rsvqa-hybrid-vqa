@@ -283,15 +283,19 @@ class QueryResults:
     model_error: list[float]         # count only: |prediction - truth|
     top_similarity: list[float]
     neighbours_right: list[float]    # share of neighbours the model answers right (training data)
+    same_question: list[float]       # share of neighbours whose question text is the query's exactly
+    mean_similarity: list[float]     # mean cosine similarity to the k neighbours
+    random_similarity: list[float]   # mean cosine similarity to the k random rows (the control)
 
 
 def _empty_results() -> QueryResults:
-    return QueryResults(*([] for _ in range(10)))
+    return QueryResults(*([] for _ in QueryResults.__dataclass_fields__))
 
 
 def score_queries(
     model: nn.Module, dataset: Any, rows: list[int], index: RetrievalIndex, train_truths: np.ndarray,
-    train_right: np.ndarray, config: dict[str, Any], device: torch.device, rng: np.random.Generator, desc: str,
+    train_right: np.ndarray, train_questions: np.ndarray, config: dict[str, Any], device: torch.device,
+    rng: np.random.Generator, desc: str,
 ) -> dict[str, QueryResults]:
     records = dataset.qa_records
     features = empty_features(len(rows), model.classifier.in_features)
@@ -324,6 +328,10 @@ def score_queries(
                 r.model_error.append(abs(prediction - truth))
             r.top_similarity.append(float(sims[i, 0]))
             r.neighbours_right.append(float(train_right[neighbours[i]].mean()))
+            r.same_question.append(float(np.mean(train_questions[neighbours[i]] == records[rows[j]]["question"])))
+            r.mean_similarity.append(float(sims[i].mean()))
+            query = features.vectors[j].astype(np.float32)
+            r.random_similarity.append(float((np.asarray(index.vectors[np.sort(random_neighbours[i])], dtype=np.float32) @ query).mean()))
     return dict(results)
 
 
@@ -386,6 +394,18 @@ def results_section(title: str, results: dict[str, QueryResults], types: list[st
             f"| {_mean(r.random_vote_is_answer):.1%} | {_mean(r.agreement):.3f} | {_mean(r.random_agreement):.3f} "
             f"| {_mean(r.top_similarity):.3f} | {_mean(r.neighbours_right):.1%} |"
         )
+    lines += [
+        "",
+        "What the neighbours are (descriptive; cannot change the result above). Similarity is cosine "
+        "between fused vectors; random is the same query against the random control rows.\n",
+        "| Type | Same question text | Mean similarity, neighbours | Mean similarity, random |",
+        "|---|---|---|---|",
+    ]
+    for qtype in types:
+        if qtype not in results:
+            continue
+        r = results[qtype]
+        lines.append(f"| {qtype} | {_mean(r.same_question):.1%} | {_mean(r.mean_similarity):.3f} | {_mean(r.random_similarity):.3f} |")
     if COUNT in results and results[COUNT].vote_error:
         r = results[COUNT]
         lines.append(f"\nCount MAE: model {_mean(r.model_error):.3f}, neighbours' median count {_mean(r.vote_error):.3f}.")
@@ -416,6 +436,7 @@ def run_retrieval(run_dir: Path, config: dict[str, Any], pilot: bool = False, in
         _is_correct(_prediction(features, j, r["type"] == COUNT), train_truths[j], r["type"] == COUNT)
         for j, r in enumerate(train_records)
     ])
+    train_questions = np.array([r["question"] for r in train_records], dtype=object)
     index = RetrievalIndex(features.vectors, [r["type"] for r in train_records], config["rag_search_chunk_rows"])
     rng = np.random.default_rng(config["rag_seed"])
 
@@ -426,7 +447,7 @@ def run_retrieval(run_dir: Path, config: dict[str, Any], pilot: bool = False, in
         dataset = dataloaders[split].dataset
         rows = question_pool(dataset.qa_records, config["rag_seed"])
         queries += len(rows)
-        per_split[split] = score_queries(model, dataset, rows, index, train_truths, train_right, config,
+        per_split[split] = score_queries(model, dataset, rows, index, train_truths, train_right, train_questions, config,
                                          device, rng, f"score {split}")
     pooled = _merge(list(per_split.values()))
     passed = [t for t in types if t in pooled
