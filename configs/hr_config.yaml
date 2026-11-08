@@ -101,3 +101,28 @@ rag_tile_batch_size: 16                # tiles encoded at once; each is then fus
 rag_question_batch_size: 512
 rag_search_chunk_rows: 65536           # index rows compared at once: bounds memory, also on the Mac
 rag_bootstrap_samples: 1000
+
+# --- RAG explanations (src/rag/explain_agent.py) ---
+# Any OpenAI-compatible chat endpoint. The key is read from this environment variable, never stored.
+rag_llm_base_url: https://api.groq.com/openai/v1
+rag_llm_model: openai/gpt-oss-120b     # VERIFY in the Groq console's model list when creating the key
+rag_llm_api_key_env: GROQ_API_KEY
+rag_llm_temperature: 0
+rag_llm_max_tokens: 1024               # room for the model's hidden reasoning as well as the text
+rag_llm_extra: {reasoning_effort: low} # extra request fields; {} for models without this option
+rag_llm_min_interval_s: 8              # seconds between requests, to stay under free-tier token limits
+rag_llm_max_retries: 5
+rag_llm_timeout_s: 60
+rag_max_words: 90                      # the LLM's part, after the answer sentence written by code
+rag_top_cells: 3                       # occlusion cells described, as 3x3 zones of the tile
+# Fixed before any explanation: classification warns below this many agreeing neighbours (of rag_k);
+# count warns when the rounded count is outside the neighbours' range of true counts.
+rag_warning_min_agree: 3
+rag_rating_per_group: 4                # per test split, type and right/wrong: 2 x 4 x 2 x 4 = 64 questions
+rag_pilot_rating_per_group: 1          # 16 questions
+# Lower-case regular expressions; a match sends the text back to the template.
+rag_banned_phrases:
+  - '\b(shows?|showing|highlights?|highlighted|contains?|locates?|located|points? to|detects?|detected|identifies|identified|spots?|spotted)\b[^.]{0,60}\b(buildings?|roads?|houses?|residential|commercial|water|trees?|parking|cars?|fields?|grass|objects?)\b'
+  - '\bthe model (sees|saw|looked|looks|noticed|notices|recogni[sz]ed|detected|identified|found)\b'
+  - '\b(correct|correctly|incorrect|incorrectly|wrong|mistaken|mistake|accurate|accurately)\b'
+  - 'similarity'
