@@ -123,6 +123,9 @@ rag_pilot_rating_per_group: 1          # 16 questions
 # Lower-case regular expressions; a match sends the text back to the template.
 rag_banned_phrases:
   - '\b(shows?|showing|highlights?|highlighted|contains?|locates?|located|points? to|detects?|detected|identifies|identified|spots?|spotted)\b[^.]{0,60}\b(buildings?|roads?|houses?|residential|commercial|water|trees?|parking|cars?|fields?|grass|objects?)\b'
-  - '\bthe model (sees|saw|looked|looks|noticed|notices|recogni[sz]ed|detected|identified|found)\b'
   - '\b(correct|correctly|incorrect|incorrectly|wrong|mistaken|mistake|accurate|accurately)\b'
   - 'similarity'
+  - '\b(it|the model|model)\s+(sees|saw|looked|looks|noticed|notices|recogni[sz]ed|detected|identified|found|believes?|thinks?|learned|learnt|associates?)\b'
+  - '\b(based on|supported by|supports?|backed by|precedent|reason to|reasoning|relie[sd]|rely|relying|driven by|drives|drove|learned|learnt)\b'
+  - '\b(contains?|contained|containing|cues?|features?|unseen|hidden)\b'
+  - '\bthe explanation\b'

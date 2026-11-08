@@ -119,7 +119,8 @@ def _number(value: float) -> str:
 
 
 def facts_text(facts: Facts, with_neighbours: bool) -> str:
-    """The facts block the LLM sees. The truth and whether the model is right are left out."""
+    """The facts block the LLM sees. The truth and whether the model is right are left out. The warning and
+    the strip are stated only when they apply: the pilot showed a "no" line gets repeated back as filler."""
     lines = [f"Question: {facts.question}", f"Question type: {facts.qtype}"]
     if facts.confidence is None:
         lines.append(f'Model\'s answer: "{facts.answer}" (a count; the model gives no confidence for counts)')
@@ -135,8 +136,10 @@ def facts_text(facts: Facts, with_neighbours: bool) -> str:
         else:
             low, high = facts.count_range
             lines.append(f"Similar cases' true counts range from {_number(low)} to {_number(high)}")
-        lines.append(f"Uncertain: {'yes' if facts.warning else 'no'}")
-    lines.append(f"Black no-data strip on this tile: {'yes' if facts.strip else 'no'}")
+        if facts.warning:
+            lines.append("Uncertain: yes")
+    if facts.strip:
+        lines.append("Black no-data strip on this tile: yes")
     return "\n".join(lines)
 
 
@@ -147,27 +150,43 @@ def first_sentence(facts: Facts) -> str:
     return f'The model answered "{facts.answer}" with {facts.confidence:.0%} confidence.'
 
 
-SYSTEM_PROMPT = """You explain one answer of an aerial-image question-answering model to a non-expert.
+PROMPT_START = """You explain one answer of an aerial-image question-answering model to a non-expert.
 The first sentence, stating the model's answer, is already written. Write only what follows it.
 
 Rules:
-- Use only the facts given. Do not guess what is in the image; you have not seen it.
-- 2 to 4 sentences, at most {max_words} words, plain English.
+- Use only the facts given. You have not seen the image: never guess what is in it, what the grid cells
+  contain, or what features, cues or patterns the model used, learned or believes.
+- Do not explain why the model answered as it did. Report the facts; do not add reasons.
+- 1 to 3 sentences, at most {max_words} words, plain English. Short is fine when there is little to say.
 - Do not state the answer again as your own claim, and do not say whether it is correct.
 - Only use numbers that appear in the facts.
-- Refer to similar training cases only as #1 to #5, by rank. Never mention similarity scores.
 - The grid cells are where changing the image changed the answer most. Never say they show, contain,
-  highlight or locate any object.
+  highlight or locate anything.
+- If the facts mention a black no-data strip, say the tile has a "no-data strip" and that strong cells
+  near it say nothing about what is there. If they do not mention one, never mention a strip or missing data."""
+
+PROMPT_WITH_NEIGHBOURS = """
+- The similar training cases were found after the model answered, by comparing its internal representation.
+  They did not cause, support or influence the answer: never say the answer is based on, supported by,
+  driven by or explained by them. You may say how many of them have the model's answer as their true answer.
+- Refer to them only as #1 to #5, by rank. For each, say only what the facts give: its question and its true
+  answer. Never say whether the model was right on them, and never mention similarity scores.
+- Call their answers "true answers", never "correct" answers.
 - If the facts say "Uncertain: yes", say the answer is uncertain and why, using the word "uncertain".
-  If they say "Uncertain: no", or give no Uncertain line, do not use the word "uncertain".
-- If the facts say the tile has a black no-data strip, mention the "no-data strip" and that strong cells
-  near it say nothing about what is there. Otherwise do not mention a strip.
-- Do not say whether the model was right on the training cases."""
+  Otherwise never use the word "uncertain"."""
+
+PROMPT_WITHOUT_NEIGHBOURS = """
+- You are given no training cases or examples. Never mention any, and never write "#" followed by a number."""
+
+
+def system_prompt(config: dict[str, Any], with_neighbours: bool) -> str:
+    rules = PROMPT_WITH_NEIGHBOURS if with_neighbours else PROMPT_WITHOUT_NEIGHBOURS
+    return PROMPT_START.format(max_words=config["rag_max_words"]) + rules
 
 
 def build_messages(facts: Facts, config: dict[str, Any], with_neighbours: bool) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": SYSTEM_PROMPT.format(max_words=config["rag_max_words"])},
+        {"role": "system", "content": system_prompt(config, with_neighbours)},
         {"role": "user", "content": f"Facts:\n{facts_text(facts, with_neighbours)}\n\n"
                                     f"Already written: {first_sentence(facts)}\nContinue:"},
     ]
@@ -213,8 +232,9 @@ def template_body(facts: Facts, with_neighbours: bool) -> str:
                 sentences.append("Because most of them disagree, treat this answer as uncertain.")
         else:
             low, high = facts.count_range
-            sentences.append(f"The {k} training questions the model treats as most similar had true counts "
-                             f"from {_number(low)} to {_number(high)}.")
+            spread = (f"all had a true count of {_number(low)}" if low == high
+                      else f"had true counts from {_number(low)} to {_number(high)}")
+            sentences.append(f"The {k} training questions the model treats as most similar {spread}.")
             if facts.warning:
                 sentences.append("This count falls outside that range, so treat it as uncertain.")
     zones = facts.zones[0] if len(facts.zones) == 1 else f"{', '.join(facts.zones[:-1])} and {facts.zones[-1]}"
@@ -441,7 +461,8 @@ def write_rating_sheet(items: list[dict[str, Any]], seed: int, sheet: Path, key:
         for item in items:
             first = rng.choice(CONDITIONS)
             second = CONDITIONS[1] if first == CONDITIONS[0] else CONDITIONS[0]
-            order[item["id"]] = [first, second]
+            order[item["id"]] = {"order": [first, second],
+                                 "sources": {c: item[c]["source"] for c in CONDITIONS}}
             facts = item["facts"]
             writer.writerow({
                 "id": item["id"], "split": facts["split"], "question": facts["question"],
@@ -462,47 +483,69 @@ def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, flo
     return centre - half, centre + half
 
 
+def _preference_line(label: str, wins: dict[str, int], same: int) -> str:
+    decided = wins["with_neighbours"] + wins["without_neighbours"]
+    if not decided:
+        return f"| {label} | 0 | — | — | {same} |"
+    low, high = wilson_interval(wins["with_neighbours"], decided)
+    return (f"| {label} | {decided} | {wins['with_neighbours']} ({wins['with_neighbours'] / decided:.0%}) "
+            f"| {low:.0%} to {high:.0%} | {same} |")
+
+
 def score_ratings(sheet: Path, key: Path) -> str:
-    """Unblinds a filled-in sheet. ``prefer`` is 1, 2 or 'same'; scores are 1 (poor) to 3 (good)."""
-    order = json.loads(key.read_text())
-    scores: dict[str, dict[str, list[float]]] = {c: {"useful": [], "honest": []} for c in CONDITIONS}
-    wins = {c: 0 for c in CONDITIONS}
-    same = unrated = 0
+    """Unblinds a filled-in sheet. ``prefer`` is 1, 2 or 'same'; scores are 1 (poor) to 3 (good).
+
+    Only pairs where both texts are the LLM's decide: a pair of LLM text against the template compares
+    writers, not retrieval. All pairs, and pairs by source, are reported alongside."""
+    key_data = json.loads(key.read_text())
+    groups = ("both LLM", "with: LLM, without: template", "with: template, without: LLM", "both template")
+    scores = {g: {c: {"useful": [], "honest": []} for c in CONDITIONS} for g in (*groups, "all")}
+    wins = {g: {c: 0 for c in CONDITIONS} for g in (*groups, "all")}
+    same = {g: 0 for g in (*groups, "all")}
+    unrated = 0
     with sheet.open(newline="") as f:
         for row in csv.DictReader(f):
-            conditions = order[row["id"]]
-            for slot, condition in zip(("1", "2"), conditions):
-                for measure in ("useful", "honest"):
-                    value = row[f"{measure}_{slot}"].strip()
-                    if value:
-                        scores[condition][measure].append(float(value))
+            entry = key_data[row["id"]]
+            conditions, sources = entry["order"], entry["sources"]
+            with_llm, without_llm = (sources[c] == "llm" for c in CONDITIONS)
+            group = groups[0] if with_llm and without_llm else groups[1] if with_llm else \
+                groups[2] if without_llm else groups[3]
+            for g in (group, "all"):
+                for slot, condition in zip(("1", "2"), conditions):
+                    for measure in ("useful", "honest"):
+                        value = row[f"{measure}_{slot}"].strip()
+                        if value:
+                            scores[g][condition][measure].append(float(value))
             prefer = row["prefer"].strip().lower()
             if prefer in ("1", "2"):
-                wins[conditions[int(prefer) - 1]] += 1
+                for g in (group, "all"):
+                    wins[g][conditions[int(prefer) - 1]] += 1
             elif prefer == "same":
-                same += 1
+                same[group] += 1
+                same["all"] += 1
             else:
                 unrated += 1
-    decided = wins["with_neighbours"] + wins["without_neighbours"]
-    low, high = wilson_interval(wins["with_neighbours"], decided)
+    deciding = wins["both LLM"]
+    decided = deciding["with_neighbours"] + deciding["without_neighbours"]
+    low, _ = wilson_interval(deciding["with_neighbours"], decided)
     improves = decided > 0 and low > 0.5
     lines = [
         "# Blind rating of RAG explanations\n",
-        "**Rule, fixed in advance:** retrieval improves the explanations if, among questions with a preference, "
-        "the share preferring the one with neighbours has a 95% Wilson lower bound above 0.5.\n",
+        "**Rule, fixed before rating:** among pairs where both texts are written by the LLM and a preference "
+        "is given, retrieval improves the explanations if the share preferring the one with neighbours has a "
+        "95% Wilson lower bound above 0.5. Pairs involving the template compare writers, not retrieval, and "
+        "do not decide.\n",
+        (f"**Result: {'retrieval improves the explanations' if improves else 'no clear improvement from retrieval'}.**\n"
+         if decided else "**No preferences given yet on pairs where both texts are the LLM's.**\n"),
+        f"Not rated: {unrated}.\n",
+        "| Pairs | With a preference | Preferred with neighbours | 95% CI | Same |",
+        "|---|---|---|---|---|",
     ]
-    if decided:
-        lines.append(
-            f"**Result: {'retrieval improves the explanations' if improves else 'no clear improvement from retrieval'}.** "
-            f"Preferred with neighbours: {wins['with_neighbours']} of {decided} ({wins['with_neighbours'] / decided:.0%}, "
-            f"95% CI {low:.0%} to {high:.0%}).\n"
-        )
-    else:
-        lines.append("**No preferences given yet.**\n")
-    lines.append(f"Preferred without neighbours: {wins['without_neighbours']}; same: {same}; not rated: {unrated}.\n")
+    lines += [_preference_line(g, wins[g], same[g]) for g in (*groups, "all")]
     mean = lambda values: f"{np.mean(values):.2f} (n={len(values)})" if values else "—"
-    lines += ["| Condition | Useful (1-3) | Honest about uncertainty (1-3) |", "|---|---|---|"]
-    lines += [f"| {c.replace('_', ' ')} | {mean(scores[c]['useful'])} | {mean(scores[c]['honest'])} |" for c in CONDITIONS]
+    lines += ["", "| Pairs | Condition | Useful (1-3) | Honest about uncertainty (1-3) |", "|---|---|---|---|"]
+    lines += [f"| {g} | {c.replace('_', ' ')} | {mean(scores[g][c]['useful'])} | {mean(scores[g][c]['honest'])} |"
+              for g in ("both LLM", "all") for c in CONDITIONS]
     return "\n".join(lines) + "\n"
 
 

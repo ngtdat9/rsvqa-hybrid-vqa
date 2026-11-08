@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
+# local copy of the Drive run folders (checkpoints, indexes, rating keys)
+rsvqa_experiments/

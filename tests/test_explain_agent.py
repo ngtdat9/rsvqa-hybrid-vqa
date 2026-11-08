@@ -85,11 +85,17 @@ def test_warning_rules():
 def test_facts_text_hides_the_truth_and_drops_neighbours_without_retrieval():
     facts = make_facts(truth="no", correct=False)
     with_n, without = facts_text(facts, True), facts_text(facts, False)
-    assert '#1 "Is there a road?" true answer: yes' in with_n and "4 of 5" in with_n and "Uncertain: no" in with_n
+    assert '#1 "Is there a road?" true answer: yes' in with_n and "4 of 5" in with_n
     assert "#1" not in without and "Uncertain" not in without
+    # a "no" line is left out: the pilot LLM echoed it back as filler ("there is no no-data strip")
+    assert "Uncertain" not in with_n and "strip" not in with_n
+    flagged = make_facts(warning=True, agree=1, strip=True)
+    assert "Uncertain: yes" in facts_text(flagged, True) and "Uncertain" not in facts_text(flagged, False)
+    assert all("no-data strip on this tile: yes" in facts_text(flagged, w) for w in (True, False))
     for text in (with_n, without):
         assert "correct" not in text.lower() and 'answer: "no"' not in text
     assert "range from 2 to 9" in facts_text(count_facts(), True)
+    assert "all had a true count of 0" in template_body(count_facts(count_range=(0.0, 0.0)), True)
     assert first_sentence(make_facts()) == 'The model answered "yes" with 93% confidence.'
     assert first_sentence(count_facts()) == 'The model answered "7".'
 
@@ -110,6 +116,16 @@ def test_the_template_passes_every_check(facts, with_neighbours):
     ("The model saw a road at the top left.", "banned phrasing"),
     ("This answer is correct, as #1 agrees.", "banned phrasing"),
     ("Its similarity to #1 is high.", "banned phrasing"),
+    # phrasings the pilot LLM used that the first checks let through
+    ("Because none of the training cases conflicted, the model had no reason to doubt it.", "banned phrasing"),
+    ("This suggests the confidence is based on strong precedent from those cases.", "banned phrasing"),
+    ("The confidence is supported by five closely matching training examples.", "banned phrasing"),
+    ("It sees a pattern similar to #1 through #5.", "banned phrasing"),
+    ("Those areas hold visual cues the model associates with roads.", "banned phrasing"),
+    ("These cells appear to contain the features the model uses.", "banned phrasing"),
+    ("The explanation notes that #1 agrees.", "banned phrasing"),
+    ("The model relied heavily on that part of the image.", "banned phrasing"),
+    ("In #1 to #5 the correct counts were all zero.", "banned phrasing"),
     ("This answer is uncertain.", "uncertainty note not called for"),
     ("The tile has a no-data strip.", "no-data note not called for"),
     ("word " * 91, "too long"),
@@ -127,6 +143,16 @@ def test_checks_require_the_warning_and_strip_notes_when_called_for():
     # without neighbours there is no warning to require, and mentioning uncertainty is allowed
     assert check_explanation("Changing the top left changed it most. The no-data strip says nothing about what is there; "
                              "the answer may be uncertain.", facts, config(), False) == []
+
+
+def test_each_condition_gets_its_own_prompt():
+    facts = make_facts()
+    with_n = ea.build_messages(facts, config(), True)[0]["content"]
+    without = ea.build_messages(facts, config(), False)[0]["content"]
+    assert "#1 to #5" in with_n and "uncertain" in with_n
+    # mentioning ranked cases made the pilot LLM invent them when none were given
+    assert "#1" not in without and "uncertain" not in without.lower()
+    assert "no training cases" in without
 
 
 class FakeClient:
@@ -224,8 +250,10 @@ def test_rating_sheet_is_blind_and_scoring_unblinds_it(tmp_path: Path):
     items = []
     for i in range(30):
         facts = make_facts(row=i)
+        without_source = "llm" if i < 20 else "template"  # 20 pairs both LLM, 10 LLM against the template
         items.append({"id": f"test-{i}", "facts": vars(facts) | {"neighbours": []},
-                      "with_neighbours": {"text": f"WITH {i}"}, "without_neighbours": {"text": f"WITHOUT {i}"}})
+                      "with_neighbours": {"text": f"WITH {i}", "source": "llm"},
+                      "without_neighbours": {"text": f"WITHOUT {i}", "source": without_source}})
     sheet, key = tmp_path / "sheet.csv", tmp_path / "key.json"
     write_rating_sheet(items, 0, sheet, key)
     rows = list(csv.DictReader(sheet.open()))
@@ -245,10 +273,21 @@ def test_rating_sheet_is_blind_and_scoring_unblinds_it(tmp_path: Path):
         writer.writeheader()
         writer.writerows(rows)
     report = score_ratings(sheet, key)
-    assert "**Result: retrieval improves the explanations.** Preferred with neighbours: 29 of 29" in report
-    assert "same: 1" in report
-    assert "| with neighbours | 3.00 (n=30) | 3.00 (n=30) |" in report
-    assert "| without neighbours | 1.00 (n=30) | 2.00 (n=30) |" in report
+    assert "**Result: retrieval improves the explanations.**" in report
+    assert "| both LLM | 19 | 19 (100%) |" in report and report.split("| both LLM | 19 | 19 (100%) |")[1].split("\n")[0].endswith("| 1 |")
+    assert "| with: LLM, without: template | 10 | 10 (100%) |" in report
+    assert "| all | 29 | 29 (100%) |" in report
+    assert "| both LLM | with neighbours | 3.00 (n=20) | 3.00 (n=20) |" in report
+    assert "| all | without neighbours | 1.00 (n=30) | 2.00 (n=30) |" in report
+
+    # preferences on LLM-against-template pairs alone never decide
+    for row in rows[:20]:
+        row["prefer"] = ""
+    with sheet.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    assert "**No preferences given yet on pairs where both texts are the LLM's.**" in score_ratings(sheet, key)
 
 
 def test_generate_runs_end_to_end_with_a_fake_llm(trained_run, tmp_path: Path):
