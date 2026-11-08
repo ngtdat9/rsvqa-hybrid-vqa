@@ -91,6 +91,9 @@ def test_facts_text_hides_the_truth_and_drops_neighbours_without_retrieval():
     assert "Uncertain" not in with_n and "strip" not in with_n
     flagged = make_facts(warning=True, agree=1, strip=True)
     assert "Uncertain: yes" in facts_text(flagged, True) and "Uncertain" not in facts_text(flagged, False)
+    assert "Uncertain: yes, because only 1 of the 5 similar cases" in facts_text(flagged, True)
+    assert "outside the similar cases' range" in facts_text(count_facts(warning=True), True)
+    assert "true counts: all 0" in facts_text(count_facts(count_range=(0.0, 0.0)), True)
     assert all("no-data strip on this tile: yes" in facts_text(flagged, w) for w in (True, False))
     for text in (with_n, without):
         assert "correct" not in text.lower() and 'answer: "no"' not in text
@@ -126,6 +129,8 @@ def test_the_template_passes_every_check(facts, with_neighbours):
     ("The explanation notes that #1 agrees.", "banned phrasing"),
     ("The model relied heavily on that part of the image.", "banned phrasing"),
     ("In #1 to #5 the correct counts were all zero.", "banned phrasing"),
+    ("The answer is uncertain because the model's confidence is only 51%.", "banned phrasing"),
+    ("The answer is marked as uncertain because the model indicated uncertainty.", "banned phrasing"),
     ("This answer is uncertain.", "uncertainty note not called for"),
     ("The tile has a no-data strip.", "no-data note not called for"),
     ("word " * 91, "too long"),

@@ -131,3 +131,4 @@ rag_banned_phrases:
   - '\b(based on|supported by|supports?|backed by|precedent|reason to|reasoning|relie[sd]|rely|relying|driven by|drives|drove|learned|learnt)\b'
   - '\b(contains?|contained|containing|cues?|features?|unseen|hidden)\b'
   - '\bthe explanation\b'
+  - '\buncertain\b[^.]*\b(confidence|indicated|indicates)\b'

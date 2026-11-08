@@ -135,9 +135,13 @@ def facts_text(facts: Facts, with_neighbours: bool) -> str:
             lines.append(f"Similar cases whose true answer is the model's answer: {facts.agree} of {k}")
         else:
             low, high = facts.count_range
-            lines.append(f"Similar cases' true counts range from {_number(low)} to {_number(high)}")
+            lines.append(f"Similar cases' true counts: all {_number(low)}" if low == high
+                         else f"Similar cases' true counts range from {_number(low)} to {_number(high)}")
         if facts.warning:
-            lines.append("Uncertain: yes")
+            # the reason is stated: without it the pilot LLM blamed the model's confidence
+            reason = ("the model's count is outside the similar cases' range of true counts" if facts.count_range
+                      else f"only {facts.agree} of the {k} similar cases have the model's answer as their true answer")
+            lines.append(f"Uncertain: yes, because {reason}")
     if facts.strip:
         lines.append("Black no-data strip on this tile: yes")
     return "\n".join(lines)
@@ -169,10 +173,12 @@ PROMPT_WITH_NEIGHBOURS = """
 - The similar training cases were found after the model answered, by comparing its internal representation.
   They did not cause, support or influence the answer: never say the answer is based on, supported by,
   driven by or explained by them. You may say how many of them have the model's answer as their true answer.
-- Refer to them only as #1 to #5, by rank. For each, say only what the facts give: its question and its true
-  answer. Never say whether the model was right on them, and never mention similarity scores.
+- Refer to them only as #1 to #5, by rank. Do not list all of them; mention at most two by rank. For any you
+  mention, say only what the facts give: its question and its true answer. Never say whether the model was
+  right on them, and never mention similarity scores.
 - Call their answers "true answers", never "correct" answers.
-- If the facts say "Uncertain: yes", say the answer is uncertain and why, using the word "uncertain".
+- If the facts say "Uncertain: yes", say the answer is uncertain, using the word "uncertain", and give exactly
+  the reason the facts state. The reason is the similar cases, never the model's confidence.
   Otherwise never use the word "uncertain"."""
 
 PROMPT_WITHOUT_NEIGHBOURS = """
