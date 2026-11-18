@@ -132,3 +132,17 @@ rag_banned_phrases:
   - '\b(contains?|contained|containing|cues?|features?|unseen|hidden)\b'
   - '\bthe explanation\b'
   - '\buncertain\b[^.]*\b(confidence|indicated|indicates)\b'
+
+# --- Week 7 demo (src/demo) ---
+# The bundle is exported on Colab (python -m src.demo.bundle) and downloaded to the Mac.
+demo_bundle_dir: demo_bundle
+demo_index_dir: rsvqa_experiments/hr_full_20261031-090319/retrieval  # the Mac's copy of the full index
+# Demo tiles per test split, walking the seeded question pool: one tile with a warned question per type,
+# then tiles with a wrong unwarned answer, then tiles answered right (4 + 3 + 3 = 10 per split, 20 in all).
+demo_warned_per_type: 1
+demo_wrong_tiles: 3
+demo_right_tiles: 3
+demo_thumb_size: 128                   # training-tile thumbnails for the neighbour cards (pixels)
+demo_heatmap_alpha: 0.6                # occlusion overlay opacity in the app
+demo_llm_timeout_s: 15                 # live LLM calls in the app fail fast, then use the template
+demo_llm_max_retries: 0

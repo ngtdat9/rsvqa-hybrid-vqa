@@ -1,0 +1,3 @@
+# Extra for the local demo app (src/demo/app.py) on the laptop only; Colab does not need it.
+-r requirements.txt
+gradio>=5,<6

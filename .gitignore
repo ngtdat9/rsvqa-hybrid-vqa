@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 # local copy of the Drive run folders (checkpoints, indexes, rating keys)
 rsvqa_experiments/
+# Week 7 demo bundle (exported on Colab, ~100-150 MB)
+demo_bundle/

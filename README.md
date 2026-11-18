@@ -123,6 +123,13 @@ python -m src.rag.retrieval_index experiments/<run> configs/hr_config.yaml
 GROQ_API_KEY=... python -m src.rag.explain_agent experiments/<run> configs/hr_config.yaml generate
 ```
 
+**Local demo (Week 7):** export the bundle on Colab (notebook step 14), unzip it into the project as `demo_bundle/`, then:
+
+```bash
+pip install -r requirements-demo.txt
+python -m src.demo.app        # http://127.0.0.1:7860; add --no-llm to stay offline
+```
+
 On Colab, [`notebooks/colab_hr_pilot.ipynb`](notebooks/colab_hr_pilot.ipynb) runs every step. Figures and the PDF are
 rebuilt with `bash docs/report/build.sh`.
 

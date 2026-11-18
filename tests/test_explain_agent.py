@@ -170,7 +170,7 @@ def test_the_two_conditions_differ_only_by_the_neighbour_paragraph():
     answer, fixed = first_sentence(facts), fixed_sentences(facts)
     assert without["text"] == f"{answer} {fixed}"
     assert with_n["text"] == f"{answer} Four of the five closest training cases, #1 to #5, had this answer. {fixed}"
-    assert "no-data strip" in fixed and "top left and centre" in fixed
+    assert "no image data (a black strip)" in fixed and "top left and centre" in fixed
 
 
 def test_explain_falls_back_to_the_template_on_a_failed_check_or_request():

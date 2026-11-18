@@ -215,7 +215,8 @@ def fixed_sentences(facts: Facts) -> str:
     sentences = [f"Changing the cells at the {zones} of the tile changed the answer most. "
                  "That tells you what the answer depended on, not where anything is."]
     if facts.strip:
-        sentences.append("The tile has a black no-data strip; strong cells next to it say nothing about what is there.")
+        sentences.append("Part of this tile has no image data (a black strip). If the strongest cells are next to it, "
+                         "that likely reflects the missing data, not anything on the ground.")
     return " ".join(sentences)
 
 
@@ -329,10 +330,12 @@ def _grid(model: nn.Module) -> int:
 def build_facts(
     model: nn.Module, dataset: Any, split: str, row: int, prediction: float, neighbour_rows: list[int],
     train: Any, train_truths: np.ndarray, config: dict[str, Any], device: torch.device,
+    scores: torch.Tensor | None = None,
 ) -> Facts:
     """The facts for one question. The answer and neighbours come from the pool that chose the question:
     re-encoding it alone can reorder near-tied neighbours (similarities are 0.99-1.00, stored in float16),
-    and the facts must match the warning the question was picked by."""
+    and the facts must match the warning the question was picked by. ``scores`` is the question's
+    occlusion map [N] when the caller already has it (the demo shows it too); otherwise it is computed."""
     from src.explain import no_data_cells, occlusion_map
 
     record = dataset.qa_records[row]
@@ -341,7 +344,8 @@ def build_facts(
     grid = _grid(model)
     with torch.no_grad():
         outputs = model(batch)
-        scores = occlusion_map(model, batch, outputs["class_logits"], outputs["count_pred"], grid * grid)[0]
+        if scores is None:
+            scores = occlusion_map(model, batch, outputs["class_logits"], outputs["count_pred"], grid * grid)[0]
     probabilities = outputs["class_logits"].softmax(-1)[0]
     predicted_class = -1 if is_count else int(prediction)
     truths = train_truths[np.asarray(neighbour_rows)]
