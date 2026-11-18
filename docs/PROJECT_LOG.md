@@ -547,8 +547,8 @@ range of true counts. On one question per test tile and type (13,128), both test
 | Area | 11.5% | 60.9% | 15.1% |
 | Count | 1.1% | 85.7% | 35.2% |
 
-- **A warned answer is about 3 to 4 times as likely to be wrong** (count about 2.4 times), and this holds in both test
-  sets. Comparison in Philadelphia separates least (29.0% against 19.5%), matching its retrieval result.
+- **A warned answer is 2.4 to 4 times as likely to be wrong**, pooled over both test sets (count 2.4, comparison 2.9,
+  presence 3.8, area 4.0). Warned answers are more often wrong in each test set too, though the gap varies. Comparison in Philadelphia separates least (29.0% against 19.5%), matching its retrieval result.
 - **Most wrong answers are not warned.** The warning fires on 1% to 12% of questions, so it is a "be careful"
   signal, not a guarantee when it is silent. Count almost never warns, because the neighbours' range is usually wide.
 - **Unanimous neighbours can back a wrong answer.** When all 5 neighbours share the model's wrong answer, the

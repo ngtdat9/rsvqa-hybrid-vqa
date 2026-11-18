@@ -15,7 +15,7 @@ zero-shot CLIP, with explanation maps that were tested before being trusted, and
 📄 **[Progress report (PDF, 17 pages)](reports/RSVQA_progress_report_weeks1-6.pdf)** ·
 📒 **[Full project log](docs/PROJECT_LOG.md)** (every run, table and decision)
 
-<img src="reports/figures/readme/key_results.png" alt="Key results: 90.2% test accuracy; 76.9% in Philadelphia, a city never seen in training; +40.8 points above zero-shot CLIP; answers are 3-4 times more likely wrong when the RAG warning fires" width="900">
+<img src="reports/figures/readme/key_results.png" alt="Key results: 90.2% test accuracy; 76.9% in Philadelphia, a city never seen in training; +40.8 points above zero-shot CLIP; answers are 2.4 to 4 times more likely wrong when the RAG warning fires" width="900">
 
 <img src="reports/figures/xai/followup_test_presence_yes_1.png" alt="One question, four explanation maps: the tile, then cross-attention, rollout, Grad-CAM and occlusion" width="900">
 
@@ -84,7 +84,7 @@ right warning) before it is shown, falling back to a template.
 <img src="reports/figures/readme/warning_rates.png" alt="How often the model is wrong when the RAG warning fires and when it does not, per question type" width="600">
 
 - **Retrieval flags wrong answers better than random neighbours on every question type** (AUROC 0.67 to 0.85).
-- **A warned answer is 3–4× as likely to be wrong.** The warning is rare (1–12% of questions), so silence is not a
+- **A warned answer is 2.4–4× as likely to be wrong** (both test sets pooled: count 2.4×, comparison 2.9×, presence 3.8×, area 4.0×). The warning is rare (1–12% of questions), so silence is not a
   guarantee.
 
 ## Limitations
